@@ -1,0 +1,8 @@
+numpy>=1.23.5
+scikit-learn>=1.2.2
+coverage>=7.9.1
+coverage-badge>=1.1.2
+ruff>=0.12.3
+setuptools>=80.9.0
+Sphinx>=8.2.3
+sphinx-automodapi>=0.20.0

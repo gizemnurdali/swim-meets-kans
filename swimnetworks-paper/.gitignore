@@ -1,0 +1,6 @@
+swimnetworks.egg-info/
+experiments/barron_function/hyperparameter_study/figures/
+experiments/openml/hyperparameter_study/figures/
+*__pycache__*
+build/*
+*.venv

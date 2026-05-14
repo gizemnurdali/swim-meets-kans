@@ -1,0 +1,4 @@
+Attributes
+~~~~~~~~~~
+.. automodapi::
+   swimnetworks

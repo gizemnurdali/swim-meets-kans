@@ -1,0 +1,5 @@
+[run]
+omit =
+    tests/*
+    swimnetworks/fourier.py
+    swimnetworks/deeponet.py
