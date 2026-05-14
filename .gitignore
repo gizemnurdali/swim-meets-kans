@@ -22,3 +22,4 @@ model/
 dist/
 build/
 *.egg-info/
+*.skill
