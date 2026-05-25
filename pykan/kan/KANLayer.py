@@ -1,9 +1,13 @@
+"""
+It represents one layer of the KAN — the matrix Φ_l. 
+"""
+
 import torch
 import torch.nn as nn
 import numpy as np
 from .spline import *
 from .utils import sparse_mask
-
+ 
 
 class KANLayer(nn.Module):
     """
@@ -20,11 +24,11 @@ class KANLayer(nn.Module):
             the number of grid intervals
         k: int
             the piecewise polynomial order of splines
-        noise_scale: float
+        noise_scale: float (w_s)
             spline scale at initialization
-        coef: 2D torch.tensor
+        coef: 2D torch.tensor (c_n)
             coefficients of B-spline bases
-        scale_base_mu: float
+        scale_base_mu: float (w_b)
             magnitude of the residual function b(x) is drawn from N(mu, sigma^2), mu = sigma_base_mu
         scale_base_sigma: float
             magnitude of the residual function b(x) is drawn from N(mu, sigma^2), mu = sigma_base_sigma
@@ -90,31 +94,43 @@ class KANLayer(nn.Module):
         '''
         super(KANLayer, self).__init__()
         # size 
-        self.out_dim = out_dim
-        self.in_dim = in_dim
-        self.num = num
-        self.k = k
+        self.out_dim = out_dim # next layer
+        self.in_dim = in_dim # current layer
+        self.num = num # G
+        self.k = k # polynomial degree of the spline
 
+        # Scaffolding for Φ_l
+        # Create grid (knot vector) between the grid interval and expand(create) for each edge between layer l and l+1
         grid = torch.linspace(grid_range[0], grid_range[1], steps=num + 1)[None,:].expand(self.in_dim, num+1)
+        # Add boundary extensions for G+2k because of polynomial degree
         grid = extend_grid(grid, k_extend=k)
+        # Don't update the grid via gradient descent
         self.grid = torch.nn.Parameter(grid).requires_grad_(False)
-        noises = (torch.rand(self.num+1, self.in_dim, self.out_dim) - 1/2) * noise_scale / num
 
+        # noises:  (G+1, in_dim, out_dim)  → target y-values at interior knots, per edge
+        # coef:    (in_dim, out_dim, G+k)  → fitted coefficients, per edge
+        noises = (torch.rand(self.num+1, self.in_dim, self.out_dim) - 1/2) * noise_scale / num
         self.coef = torch.nn.Parameter(curve2coef(self.grid[:,k:-k].permute(1,0), noises, self.grid, k))
         
+        # 1 → edge is active, contributes to the sum at the destination neuron
+        # 0 → edge is dead, contributes nothing, effectively removed from Φ_l
         if sparse_init:
             self.mask = torch.nn.Parameter(sparse_mask(in_dim, out_dim)).requires_grad_(False)
         else:
             self.mask = torch.nn.Parameter(torch.ones(in_dim, out_dim)).requires_grad_(False)
         
+        # Xaiver inialization for fixed based activation
         self.scale_base = torch.nn.Parameter(scale_base_mu * 1 / np.sqrt(in_dim) + \
                          scale_base_sigma * (torch.rand(in_dim, out_dim)*2-1) * 1/np.sqrt(in_dim)).requires_grad_(sb_trainable)
+        # Initialized to a small constant, Xavier scaledm pruned edges start with w_s = 0
         self.scale_sp = torch.nn.Parameter(torch.ones(in_dim, out_dim) * scale_sp * 1 / np.sqrt(in_dim) * self.mask).requires_grad_(sp_trainable)  # make scale trainable
+        # Torch.nn.silu
         self.base_fun = base_fun
 
-        
+        # Controls the grid update strategy in update_grid_from_samples.
+        # When 1 → uniform grid, when 0 → data-adaptive grid based on percentiles of the input samples.
         self.grid_eps = grid_eps
-        
+        # Moves all parameters to the specified device (CPU or GPU).
         self.to(device)
         
     def to(self, device):
@@ -150,19 +166,26 @@ class KANLayer(nn.Module):
         >>> y, preacts, postacts, postspline = model(x)
         >>> y.shape, preacts.shape, postacts.shape, postspline.shape
         '''
-        batch = x.shape[0]
+        # N input
+        batch = x.shape[0] 
+        # values before the activation functions
         preacts = x[:,None,:].clone().expand(batch, self.out_dim, self.in_dim)
-            
+        
+        # compute silu
         base = self.base_fun(x) # (batch, in_dim)
+        # curve2coef → given x-points and y-values, find coefficients c_n
+        # coef2curve → given x-points and coefficients c_n, find y-values
+        # evaluate spline(x) = Σ c_n * B_{n,k}(x) per edge, raw spline output before scaling
         y = coef2curve(x_eval=x, grid=self.grid, coef=self.coef, k=self.k)
-        
+        # save raw spline outputs for visualization, reshape to (batch, out_dim, in_dim)
         postspline = y.clone().permute(0,2,1)
-            
+        # full edge function φ(x) = w_b*SiLU(x) + w_s*spline(x) → Eq. 2.11, now y = Φ_l entries
         y = self.scale_base[None,:,:] * base[:,:,None] + self.scale_sp[None,:,:] * y
+        # zero out pruned edges
         y = self.mask[None,:,:] * y
-        
+        # save full edge outputs for visualization, reshape to (batch, out_dim, in_dim)
         postacts = y.clone().permute(0,2,1)
-            
+        # sum of incoming signals over p
         y = torch.sum(y, dim=1)
         return y, preacts, postacts, postspline
 
@@ -323,7 +346,6 @@ class KANLayer(nn.Module):
         spb.in_dim = len(in_id)
         spb.out_dim = len(out_id)
         return spb
-    
     
     def swap(self, i1, i2, mode='in'):
         '''
