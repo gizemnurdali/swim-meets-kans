@@ -75,7 +75,7 @@ class SparseGPModel(gpytorch.models.ApproximateGP):
         return gpytorch.distributions.MultivariateNormal(mean, covar) # type: ignore
     
 
-# ─── Initialization ──────────────────────────────────────────────────────────────────
+# Initialize GP model and likelihood based on dataset size.
 def init_gp(X_train, y_train):
     """Initialize a Gaussian Process model, auto-selected by training set size.
     
@@ -104,7 +104,7 @@ def init_gp(X_train, y_train):
     return model, likelihood
 
 
-# ─── Training ──────────────────────────────────────────────────────────────────────────────
+# Train GP hyperparameters using exact or variational objective.
 def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
     """Train a Gaussian Process model.
     
@@ -126,7 +126,7 @@ def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
 
     # Combine model and likelihood parameters for optimization
     optimizer = torch.optim.Adam(
-        list(model.parameters()) + list(likelihood.parameters()), lr=lr
+        model.parameters(), lr=lr
     )
 
     # Choose loss function based on GP type
@@ -142,7 +142,9 @@ def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
     # Training loop
     for i in range(num_iters):
         optimizer.zero_grad()
-        output = model(X_train)
+        # Only consider latent f(X_train)
+        output = model(X_train) 
+        # ← Noise estimated HERE
         loss = -mll(output, y_train) # type: ignore
         loss.backward()
         optimizer.step()
@@ -151,7 +153,7 @@ def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
             print(f"  Iter {i+1}/{num_iters}, Loss: {loss.item():.6f}")
     
     print(f"[DEBUG] Training complete.")
-    print(f"  Lengthscale: {model.covar_module.base_kernel.lengthscale.item():.4f}")
+    print(f"  Lengthscale: {model.covar_module.base_kernel.lengthscale.detach()}")
     print(f"  Outputscale: {model.covar_module.outputscale.item():.4f}")
     print(f"  Noise: {likelihood.noise.item():.6f}")
     print(f"  Mean const: {model.mean_module.constant.item():.4f}") # type: ignore
@@ -162,7 +164,7 @@ def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
     return model, likelihood
 
 
-# ─── Prediction ────────────────────────────────────────────────────────────────────────
+# Predict posterior mean and std on input points.
 def predict(model, likelihood, X):
     """Make predictions using trained GP model.
     
@@ -187,7 +189,7 @@ def predict(model, likelihood, X):
     return mean, std
 
 
-# ─── Utility: freeze / unfreeze ────────────────────────────────────────────────────────
+# Switch model and likelihood to eval mode.
 def freeze_gp(model, likelihood):
     """Freeze (switch to eval mode) GP model and likelihood.
     
@@ -203,6 +205,7 @@ def freeze_gp(model, likelihood):
     print(f"[DEBUG] {type(model).__name__} and likelihood frozen (eval mode)")
 
 
+# Switch model and likelihood to train mode.
 def unfreeze_gp(model, likelihood):
     """Unfreeze (switch to train mode) GP model and likelihood.
     
