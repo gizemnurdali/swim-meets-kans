@@ -123,7 +123,7 @@ def interpolate_edge_functions(x_segments, edge_functions, X, x_a_selected, x_b_
 
 
 # Build a surrogate-guided KAN layer by layer using GP fitting, pair selection, and edge function construction
-def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh):
+def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh, kernel=None):
     """
     Build a surrogate-guided KAN with multiple layers.
 
@@ -133,6 +133,7 @@ def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh):
         layer_configs: list of dicts, one per layer:
                            width, M, G, T
         activation:    nonlinearity between layers
+        kernel:        optional kernel module for GP models. If None, uses RBFKernel with ARD.
 
     Returns:
         layers: list of layer dicts (for prediction)
@@ -144,8 +145,8 @@ def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh):
     for l, cfg in enumerate(layer_configs):
         print(f"\n─── Layer {l+1} | input: {current_input.shape} ───")
 
-        # Fit GP
-        gp_model, likelihood = gp.init_gp(current_input, y_train)
+        # Fit GP with optional custom kernel
+        gp_model, likelihood = gp.init_gp(current_input, y_train, kernel=kernel, num_inducing=500)
         gp_model, likelihood = gp.train_gp(gp_model, likelihood, current_input, y_train)
 
         # Pair selection
@@ -249,7 +250,7 @@ def predict_and_evaluate(H, y, W_out, split_name="Test"):
     H_b    = torch.cat([H, torch.ones(N, 1)], dim=1)  # (N, layer_width+1)
     y_pred = (H_b @ W_out).squeeze()                   # (N,)
 
-    mse    = em.compute_mse(y_pred, y)
+    mse    = em.compute_mse(y_pred, y) # type: ignore
     rel_l2 = em.compute_relative_l2(y_pred, y)
 
     print(f"[{split_name}] MSE: {mse.item():.6f} | Relative L2: {rel_l2.item():.6f}")
