@@ -116,11 +116,11 @@ def init_gp(X_train, y_train, num_inducing=None, kernel=None):
     likelihood = gpytorch.likelihoods.GaussianLikelihood()
     N = X_train.shape[0]
 
-    if N < 5000:
+    if N < 2000:
         model = ExactGPModel(X_train, y_train, likelihood, kernel=kernel)
         print(f"[DEBUG] Initialized ExactGPModel: X_train.shape={X_train.shape}")
     else:
-        # Use 5% of N, clamped between 100 (minimum quality) and 500 (cost capacity)
+        # Use 5% of N, clamped between 200 (minimum quality) and 500 (cost capacity)
         if num_inducing is None:
             num_inducing = min(500, max(200, N // 20))
         model = SparseGPModel(X_train, num_inducing, kernel=kernel)

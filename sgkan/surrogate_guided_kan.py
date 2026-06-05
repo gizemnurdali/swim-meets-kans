@@ -123,7 +123,8 @@ def interpolate_edge_functions(x_segments, edge_functions, X, x_a_selected, x_b_
 
 
 # Build a surrogate-guided KAN layer by layer using GP fitting, pair selection, and edge function construction
-def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh, kernel=None):
+def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh, kernel=None,
+                lr=0.1, num_inducing=500, num_iters=100):
     """
     Build a surrogate-guided KAN with multiple layers.
 
@@ -134,6 +135,9 @@ def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh, kernel=N
                            width, M, G, T
         activation:    nonlinearity between layers
         kernel:        optional kernel module for GP models. If None, uses RBFKernel with ARD.
+        lr:            learning rate for GP training (default: 0.1)
+        num_inducing:  number of inducing points for sparse GP (default: 500)
+        num_iters:     number of GP training iterations (default: 100)
 
     Returns:
         layers: list of layer dicts (for prediction)
@@ -145,9 +149,9 @@ def build_sgkan(X_train, y_train, layer_configs, activation=torch.tanh, kernel=N
     for l, cfg in enumerate(layer_configs):
         print(f"\n─── Layer {l+1} | input: {current_input.shape} ───")
 
-        # Fit GP with optional custom kernel
-        gp_model, likelihood = gp.init_gp(current_input, y_train, kernel=kernel, num_inducing=500)
-        gp_model, likelihood = gp.train_gp(gp_model, likelihood, current_input, y_train)
+        # Fit GP with optional custom kernel and hyperparameters
+        gp_model, likelihood = gp.init_gp(current_input, y_train, kernel=kernel, num_inducing=num_inducing)
+        gp_model, likelihood = gp.train_gp(gp_model, likelihood, current_input, y_train, num_iters=num_iters, lr=lr)
 
         # Pair selection
         x_a, x_b, _, _      = gs.sample_candidate_pairs(current_input, y_train, M=cfg["M"])
@@ -185,6 +189,8 @@ def predict_sgkan(layers, W_out, X, activation=torch.tanh):
     Returns:
         y_pred: (N,)
     """
+    if isinstance(X, np.ndarray):
+        X = torch.tensor(X, dtype=torch.float64)
     current = X
 
     for layer in layers:
