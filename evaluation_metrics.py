@@ -107,3 +107,20 @@ def evaluate(model, X_train, y_train, X_test, y_test):
 
     return results
 
+
+def print_results(results):
+    """
+    Pretty-print evaluation results in a small table.
+
+    Args:
+        results: Dict with structure {'train': {'mae': float, 'rmse': float},
+                                     'test': {'mae': float, 'rmse': float}}
+    """
+    print(f"{'Metric':<15} {'Train':<20} {'Test':<20}")
+    print("-" * 55)
+
+    for metric in ["mae", "rmse"]:
+        train_val = results["train"][metric]
+        test_val = results["test"][metric]
+        print(f"{metric.upper():<15} {train_val:<20.6e} {test_val:<20.6e}")
+
