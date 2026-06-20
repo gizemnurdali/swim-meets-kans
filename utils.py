@@ -528,6 +528,190 @@ def create_periodic_linear_kernel(input_dim):
     )
 
 
+def kernel_factory(kernel_type, X):
+    """
+    Create a GPyTorch kernel based on kernel type and input dimensionality.
+
+    Args:
+        kernel_type (str): Type of kernel to create. Options: 'rbf', 'matern',
+            'rq', 'periodic', 'periodic_rbf', 'periodic_linear'
+        X: Input data array (torch.Tensor or numpy array). Kernel dimension
+            is determined from X.shape[1]
+
+    Returns:
+        gpytorch.kernels.Kernel: Initialized kernel object for the specified type
+    """
+    kernel_factory = {
+        "rbf": create_rbf_kernel,
+        "matern": create_matern_kernel,
+        "rq": create_rq_kernel,
+        "periodic": create_periodic_kernel,
+        "periodic_rbf": create_periodic_rbf_kernel,
+        "periodic_linear": create_periodic_linear_kernel,
+    }
+
+    kernel = kernel_factory[kernel_type](X.shape[1])
+    return kernel
+
+
+def objective_gp(trial, X_train, y_train, X_test, y_test, n_splits=5, kernel_types=None):
+    """Objective function for Optuna to find the best GP hyperparameters with K-Fold CV.
+
+    Uses K-Fold Cross-Validation on training data to evaluate hyperparameter sets.
+    Searches over learning rate, kernel type, and number of inducing points.
+
+    Args:
+        trial: Optuna trial object
+        X_train, y_train: Training data
+        X_test, y_test: Test data for final evaluation
+        n_splits: Number of folds for cross-validation (default: 5)
+        kernel_types: List of kernel types to search. Default: all available types
+
+    Returns:
+        float: Average validation RMSE across all folds (what Optuna minimizes)
+    """
+    if kernel_types is None:
+        kernel_types = ["rbf", "matern", "rq", "periodic", "periodic_rbf", "periodic_linear"]
+
+    lr = trial.suggest_float("lr", 1e-4, 1e-1, log=True)
+    kernel_type = trial.suggest_categorical("kernel", kernel_types)
+    num_inducing = trial.suggest_int("num_inducing", 300, 500)
+
+    kernel = kernel_factory(kernel_type, X_train)
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold_val_rmses = []
+
+    for train_idx, val_idx in kf.split(X_train):
+        X_fold_train = X_train[train_idx]
+        y_fold_train = y_train[train_idx]
+        X_fold_val = X_train[val_idx]
+        y_fold_val = y_train[val_idx]
+
+        X_fold_train_t = torch.tensor(X_fold_train, dtype=torch.float64)
+        y_fold_train_t = torch.tensor(y_fold_train, dtype=torch.float64)
+        X_fold_val_t = torch.tensor(X_fold_val, dtype=torch.float64)
+        y_fold_val_t = torch.tensor(y_fold_val, dtype=torch.float64)
+
+        gp_model, gp_likelihood = init_and_fit_gp(
+            X_fold_train_t, y_fold_train_t,
+            kernel=kernel, num_inducing=num_inducing, lr=lr, num_iters=500
+        )
+
+        pred_mean, _ = gp.predict(gp_model, gp_likelihood, X_fold_val_t)
+        rmse = em.compute_rmse(pred_mean, y_fold_val_t).item()
+        fold_val_rmses.append(rmse)
+
+    avg_val_rmse = float(np.mean(fold_val_rmses))
+
+    X_train_t = torch.tensor(X_train, dtype=torch.float64)
+    y_train_t = torch.tensor(y_train, dtype=torch.float64)
+    X_test_t = torch.tensor(X_test, dtype=torch.float64)
+    y_test_t = torch.tensor(y_test, dtype=torch.float64)
+
+    gp_model_final, gp_likelihood_final = init_and_fit_gp(
+        X_train_t, y_train_t,
+        kernel=kernel, num_inducing=num_inducing, lr=lr, num_iters=500
+    )
+
+    pred_test, _ = gp.predict(gp_model_final, gp_likelihood_final, X_test_t)
+    test_rmse = em.compute_rmse(pred_test, y_test_t).item()
+
+    trial.set_user_attr("test_rmse", test_rmse)
+    trial.set_user_attr("val_rmse", avg_val_rmse)
+
+    return avg_val_rmse
+
+
+def study_optuna_gp(dataset_name, X_train, y_train, X_test, y_test, n_trials=10, kernel_types=None):
+    """Run Optuna parameter search for GP hyperparameters on a dataset.
+
+    Uses 5-Fold Cross-Validation to evaluate hyperparameter sets over
+    learning rate, kernel type, and number of inducing points.
+
+    Args:
+        dataset_name (str): Dataset name for output file and logging
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        n_trials (int): Number of trials to run (default: 10)
+        kernel_types: List of kernel types to search. Default: all available types
+
+    Returns:
+        dict: Best hyperparameters with keys 'lr', 'kernel', 'num_inducing'
+    """
+    if kernel_types is None:
+        kernel_types = ["rbf", "matern", "rq", "periodic", "periodic_rbf", "periodic_linear"]
+    csv_path = f"data/{dataset_name.lower()}_gp_optuna_search.csv"
+
+    if os.path.exists(csv_path):
+        print("=" * 70)
+        print(f"Results found for {dataset_name}. Loading from {csv_path}")
+        print("=" * 70)
+
+        trials_df = pd.read_csv(csv_path)
+        best_idx = trials_df['value'].idxmin()
+        best_row = trials_df.loc[best_idx]
+
+        lr = float(best_row['params_lr']) # type: ignore
+        kernel = best_row['params_kernel']
+        num_inducing = int(best_row['params_num_inducing']) # type: ignore
+
+        print(f"Best CV Validation RMSE: {best_row['value']:.6f}")
+        print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
+        print(f"Best lr:                 {lr:.6f}")
+        print(f"Best kernel:             {kernel}")
+        print(f"Best num_inducing:       {num_inducing}")
+
+        print(f"\nAll {len(trials_df)} trials:")
+        print(trials_df[['number', 'value', 'params_lr', 'params_kernel', 'params_num_inducing', 'val_rmse', 'test_rmse']].to_string())
+
+        return {"lr": lr, "kernel": kernel, "num_inducing": num_inducing}
+
+    print("=" * 70)
+    print(f"Optimizing GP hyperparameters with 5-Fold CV on {dataset_name}")
+    print("=" * 70)
+
+    study = optuna.create_study(direction='minimize')
+
+    # Force one trial per kernel type
+    for kernel in kernel_types:
+        study.enqueue_trial({"kernel": kernel})
+
+    study.optimize(
+        lambda trial: objective_gp(
+            trial, X_train, y_train, X_test, y_test, n_splits=5, kernel_types=kernel_types
+        ),
+        n_trials=n_trials,
+        show_progress_bar=True,
+    )
+
+    print("\n" + "=" * 70)
+    print("Best trial results:")
+    print("=" * 70)
+    print(f"Best CV Validation RMSE: {study.best_value:.6f}")
+    best_test_rmse = study.best_trial.user_attrs.get("test_rmse", "N/A")
+    test_rmse_str = f"{best_test_rmse:.6f}" if isinstance(best_test_rmse, float) else "N/A"
+    print(f"Best Test RMSE:          {test_rmse_str}")
+    print(f"Best lr:                 {study.best_params['lr']:.6f}")
+    print(f"Best kernel:             {study.best_params['kernel']}")
+    print(f"Best num_inducing:       {study.best_params['num_inducing']}")
+
+    trials_df = study.trials_dataframe()
+    print(f"\nAll {len(trials_df)} trials:")
+    print(trials_df[['number', 'value', 'params_lr', 'params_kernel', 'params_num_inducing', 'user_attrs_val_rmse', 'user_attrs_test_rmse']].to_string())
+
+    trials_df = trials_df.rename(columns={
+        "user_attrs_test_rmse": "test_rmse",
+        "user_attrs_val_rmse": "val_rmse",
+    })
+    trials_df['duration'] = trials_df['duration'].dt.total_seconds()
+    trials_df.to_csv(csv_path, index=False)
+
+    return {
+        "lr": study.best_params['lr'],
+        "kernel": study.best_params['kernel'],
+        "num_inducing": study.best_params['num_inducing']
+    }
 
 # ─── Visualization Utilities ──────────────────────────────────
 # Functions for visualizing model predictions

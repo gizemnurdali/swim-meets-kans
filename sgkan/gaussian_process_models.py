@@ -178,14 +178,31 @@ def train_gp(model, likelihood, X_train, y_train, num_iters=100, lr=0.1):
             print(f"  Iter {i+1}/{num_iters}, Loss: {loss.item():.6f}")
     
     print(f"[DEBUG] Training complete.")
-    # Handle different kernel types
-    if hasattr(model.covar_module.base_kernel, 'lengthscale'):
+
+    try:
         print(f"  Lengthscale: {model.covar_module.base_kernel.lengthscale.detach()}")
-    else:
+    except (AttributeError, RuntimeError):
+        print(f"  Lengthscale: Not available for this kernel")
+
+    try:
         print(f"  Kernel type: {type(model.covar_module.base_kernel).__name__}")
-    print(f"  Outputscale: {model.covar_module.outputscale.item():.4f}")
-    print(f"  Noise: {likelihood.noise.item():.6f}")
-    print(f"  Mean const: {model.mean_module.constant.item():.4f}") # type: ignore
+    except (AttributeError, RuntimeError):
+        print(f"  Kernel type: Unknown")
+
+    try:
+        print(f"  Outputscale: {model.covar_module.outputscale.item():.4f}")
+    except (AttributeError, RuntimeError):
+        print(f"  Outputscale: Not available for this kernel")
+
+    try:
+        print(f"  Noise: {likelihood.noise.item():.6f}")
+    except (AttributeError, RuntimeError):
+        print(f"  Noise: Not available")
+
+    try:
+        print(f"  Mean const: {model.mean_module.constant.item():.4f}")  # type: ignore
+    except (AttributeError, RuntimeError):
+        print(f"  Mean const: Not available")
 
     # Switch to eval mode after training - disables gradient tracking for prediction
     freeze_gp(model, likelihood)    

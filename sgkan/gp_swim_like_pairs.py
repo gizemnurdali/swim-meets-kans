@@ -1,6 +1,6 @@
 import torch
 import gpytorch
-import numpy as np
+import numpy as np 
 
 
 # Sample SWIM-style candidate pairs from training data.
@@ -27,7 +27,7 @@ def sample_candidate_pairs(X_train, y_train, M=None, random_seed=42):
 
     rng      = np.random.default_rng(random_seed)
     idx_from = rng.integers(low=0,   high=N,   size=M)
-    # delta >= 1 guarantees no self-pairs
+    # delta >= 1 guarantees no self-pairs (offset parameter)
     delta    = rng.integers(low=1,   high=N-1, size=M)  
     idx_to   = (idx_from + delta) % N
 
