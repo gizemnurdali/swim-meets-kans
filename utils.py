@@ -713,6 +713,246 @@ def study_optuna_gp(dataset_name, X_train, y_train, X_test, y_test, n_trials=10,
         "num_inducing": study.best_params['num_inducing']
     }
 
+
+# ─── SGKAN utilities ─────────────────────────────────────────────
+# Functions for building, training, and predicting with SGKAN
+
+
+# Wrapper for SGKAN model to add predict method for em.evaluate compatibility
+class SGKANModel:
+    def __init__(self, layers, W_out, activation=torch.tanh):
+        self.layers = layers
+        self.W_out = W_out
+        self.activation = activation
+    
+    def predict(self, X):
+        X_tensor = torch.tensor(X, dtype=torch.float64)
+        return sgkan.predict_sgkan(self.layers, self.W_out, X_tensor, activation=self.activation).detach().numpy()
+
+
+def fit_sgkan(
+        X_train, y_train, layer_configs, activation=torch.tanh,
+        kernel=None, lr=1e-3, num_inducing=500, num_iters=500):
+    """Train SGKAN (Surrogate-Guided KAN) model with optional custom kernel and GP hyperparameters.
+
+    Args:
+        X_train: Training input data (numpy array)
+        y_train: Training target data (numpy array)
+        layer_configs: List of dicts with layer configuration (width, M, G, T parameters)
+        activation: Activation function (default: torch.tanh)
+        kernel: GPyTorch kernel for GP (default: None)
+        lr: Learning rate for GP training (default: 0.001)
+        num_inducing: Number of inducing points for sparse GP (default: 500)
+        num_iters: Number of training iterations for GP (default: 100)
+
+    Returns:
+        tuple: (layers, W_out) representing the trained SGKAN model
+    """
+    start_time = time.time()
+    X_train_tensor = torch.tensor(X_train, dtype=torch.float64)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float64)
+
+    if isinstance(layer_configs, dict):
+        layer_configs = [layer_configs]
+
+    layers, W_out = sgkan.build_sgkan(
+        X_train_tensor, y_train_tensor, layer_configs,
+        activation=activation, kernel=kernel,
+        lr=lr, num_inducing=num_inducing, num_iters=num_iters
+    )
+
+    elapsed_time = time.time() - start_time
+    print(f"\n✓ Training completed in {elapsed_time:.4f} seconds")
+    return layers, W_out
+
+
+def predict_sgkan(layers, W_out, X_test, activation=torch.tanh):
+    """Make predictions with a trained SGKAN model.
+
+    Args:
+        layers: List of SGKAN layers from fit_sgkan
+        W_out: Output weights from fit_sgkan
+        X_test: Input data for prediction (numpy array)
+        activation: Activation function used during training (default: torch.tanh)
+
+    Returns:
+        numpy array: Predictions on test data
+    """
+    start_time = time.time()
+    X_test_tensor = torch.tensor(X_test, dtype=torch.float64)
+    predictions = sgkan.predict_sgkan(layers, W_out, X_test_tensor, activation=activation).detach().numpy()
+    elapsed_time = time.time() - start_time
+    print(f"✓ Prediction completed in {elapsed_time:.4f} seconds")
+    return predictions
+
+
+def objective_sgkan(trial, X_train, y_train, X_test, y_test, kernel=None, lr=0.001, num_inducing=500, num_iters=500, n_splits=5):
+    """Objective function for Optuna to find the best SGKAN hyperparameters with K-Fold CV.
+
+    Uses K-Fold Cross-Validation on training data to evaluate hyperparameter sets.
+    Searches over SGKAN layer width, M (pair samples), G (grid), and T (interior points).
+
+    Args:
+        trial: Optuna trial object
+        X_train, y_train: Training data
+        X_test, y_test: Test data for final evaluation
+        kernel: GPyTorch kernel for GP (default: Matérn kernel)
+        lr: Learning rate for GP training (default: 0.001)
+        num_inducing: Number of inducing points for sparse GP (default: 400)
+        num_iters: Number of training iterations for GP (default: 500)
+        n_splits: Number of folds for cross-validation (default: 5)
+
+    Returns:
+        float: Average validation RMSE across all folds (what Optuna minimizes)
+    """
+    if kernel is None:
+        kernel = create_matern_kernel(X_train.shape[1])
+
+    width = trial.suggest_int("width", 32, 200)
+    M = trial.suggest_int("M", 500, 1000)
+    G = trial.suggest_int("G", 25, 100)
+    T = trial.suggest_int("T", 5, 50)
+
+    layer_config = [{"width": width, "M": M, "G": G, "T": T}]
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold_val_rmses = []
+
+    for train_idx, val_idx in kf.split(X_train):
+        X_fold_train = X_train[train_idx]
+        y_fold_train = y_train[train_idx]
+        X_fold_val = X_train[val_idx]
+        y_fold_val = y_train[val_idx]
+
+        sgkan_layers, sgkan_W_out = fit_sgkan(
+            X_fold_train, y_fold_train, layer_config,
+            activation=torch.tanh, kernel=kernel,
+            lr=lr, num_inducing=num_inducing, num_iters=num_iters
+        )
+
+        sgkan_pred_val = sgkan.predict_sgkan(sgkan_layers, sgkan_W_out, X_fold_val, activation=torch.tanh)
+        rmse = em.compute_rmse(
+            torch.tensor(sgkan_pred_val.flatten(), dtype=torch.float64),
+            torch.tensor(y_fold_val.flatten(), dtype=torch.float64)
+        ).item()
+        fold_val_rmses.append(rmse)
+
+    avg_val_rmse = float(np.mean(fold_val_rmses))
+
+    sgkan_layers_final, sgkan_W_out_final = fit_sgkan(
+        X_train, y_train, layer_config,
+        activation=torch.tanh, kernel=kernel,
+        lr=lr, num_inducing=num_inducing, num_iters=num_iters
+    )
+
+    sgkan_pred_test = sgkan.predict_sgkan(sgkan_layers_final, sgkan_W_out_final, X_test, activation=torch.tanh)
+    test_rmse = em.compute_rmse(
+        torch.tensor(sgkan_pred_test.flatten(), dtype=torch.float64),
+        torch.tensor(y_test.flatten(), dtype=torch.float64)
+    ).item()
+
+    trial.set_user_attr("test_rmse", test_rmse)
+    trial.set_user_attr("val_rmse", avg_val_rmse)
+
+    return avg_val_rmse
+
+
+def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test, n_trials=10, kernel=None, lr=0.001, num_inducing=400, num_iters=500):
+    """Run Optuna parameter search for SGKAN hyperparameters on a dataset.
+
+    Uses 5-Fold Cross-Validation to evaluate hyperparameter sets over
+    layer width, M (pair samples), G (grid), and T (interior points).
+
+    Args:
+        dataset_name (str): Dataset name for output file and logging
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        n_trials (int): Number of trials to run (default: 10)
+        kernel: GPyTorch kernel for GP (default: Matérn kernel)
+        lr: Learning rate for GP training (default: 0.001)
+        num_inducing: Number of inducing points for sparse GP (default: 400)
+        num_iters: Number of training iterations for GP (default: 500)
+
+    Returns:
+        dict: Best hyperparameters with keys 'width', 'M', 'G', 'T'
+    """
+    if kernel is None:
+        kernel = create_matern_kernel(X_train.shape[1])
+    csv_path = f"data/{dataset_name.lower()}_sgkan_optuna_search.csv"
+
+    if os.path.exists(csv_path):
+        print("=" * 70)
+        print(f"Results found for {dataset_name}. Loading from {csv_path}")
+        print("=" * 70)
+
+        trials_df = pd.read_csv(csv_path)
+        best_idx = trials_df['value'].idxmin()
+        best_row = trials_df.loc[best_idx]
+
+        width = int(best_row['params_width'])
+        M = int(best_row['params_M'])
+        G = int(best_row['params_G'])
+        T = int(best_row['params_T'])
+
+        print(f"Best CV Validation RMSE: {best_row['value']:.6f}")
+        print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
+        print(f"Best width:              {width}")
+        print(f"Best M:                  {M}")
+        print(f"Best G:                  {G}")
+        print(f"Best T:                  {T}")
+
+        print(f"\nAll {len(trials_df)} trials:")
+        print(trials_df[['number', 'value', 'params_width', 'params_M', 'params_G', 'params_T', 'val_rmse', 'test_rmse']].to_string())
+
+        return {"width": width, "M": M, "G": G, "T": T}
+
+    print("=" * 70)
+    print(f"Optimizing SGKAN hyperparameters with 5-Fold CV on {dataset_name}")
+    print("=" * 70)
+
+    study = optuna.create_study(direction='minimize')
+
+    study.optimize(
+        lambda trial: objective_sgkan(
+            trial, X_train, y_train, X_test, y_test,
+            kernel=kernel, lr=lr, num_inducing=num_inducing, num_iters=num_iters,
+            n_splits=5
+        ),
+        n_trials=n_trials,
+        show_progress_bar=True,
+    )
+
+    print("\n" + "=" * 70)
+    print("Best trial results:")
+    print("=" * 70)
+    print(f"Best CV Validation RMSE: {study.best_value:.6f}")
+    best_test_rmse = study.best_trial.user_attrs.get("test_rmse", "N/A")
+    test_rmse_str = f"{best_test_rmse:.6f}" if isinstance(best_test_rmse, float) else "N/A"
+    print(f"Best Test RMSE:          {test_rmse_str}")
+    print(f"Best width:              {study.best_params['width']}")
+    print(f"Best M:                  {study.best_params['M']}")
+    print(f"Best G:                  {study.best_params['G']}")
+    print(f"Best T:                  {study.best_params['T']}")
+
+    trials_df = study.trials_dataframe()
+    print(f"\nAll {len(trials_df)} trials:")
+    print(trials_df[['number', 'value', 'params_width', 'params_M', 'params_G', 'params_T', 'user_attrs_val_rmse', 'user_attrs_test_rmse']].to_string())
+
+    trials_df = trials_df.rename(columns={
+        "user_attrs_test_rmse": "test_rmse",
+        "user_attrs_val_rmse": "val_rmse",
+    })
+    trials_df['duration'] = trials_df['duration'].dt.total_seconds()
+    trials_df.to_csv(csv_path, index=False)
+
+    return {
+        "width": study.best_params['width'],
+        "M": study.best_params['M'],
+        "G": study.best_params['G'],
+        "T": study.best_params['T']
+    }
+
+
 # ─── Visualization Utilities ──────────────────────────────────
 # Functions for visualizing model predictions
 
@@ -751,18 +991,24 @@ def plot_3d_surface(dataset_name, X_test, y_test, y_pred):
     X2 = X_viz[:n_grid, 1].reshape(grid_size, grid_size)
 
     ax = fig.add_subplot(121, projection="3d")
-    ax.plot_surface(X1, X2, y_pred[:n_grid].reshape(grid_size, grid_size), cmap="viridis")
+    ax.plot_surface(X1, X2, y_pred[:n_grid].reshape(grid_size, grid_size), cmap="viridis") # type: ignore
     ax.set_title(f"{dataset_name} - Predicted")
     ax.set_xlabel(f"X1{label_suffix}")
     ax.set_ylabel("X2")
-    ax.set_zlabel("Y")
+    ax.set_zlabel("Y") # type: ignore
 
     ax = fig.add_subplot(122, projection="3d")
-    ax.plot_surface(X1, X2, y_test[:n_grid].reshape(grid_size, grid_size), cmap="viridis")
+    ax.plot_surface(X1, X2, y_test[:n_grid].reshape(grid_size, grid_size), cmap="viridis") # type: ignore
     ax.set_title(f"{dataset_name} - Actual")
     ax.set_xlabel(f"X1{label_suffix}")
     ax.set_ylabel("X2")
-    ax.set_zlabel("Y")
+    ax.set_zlabel("Y") # type: ignore
 
     plt.tight_layout()
+
+    # Export figure as PNG
+    output_file = f"results/{dataset_name}_3d_surface.png"
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"✓ Figure saved to {output_file}")
+
     plt.show()
