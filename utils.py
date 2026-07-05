@@ -56,6 +56,16 @@ def build_hkan_from_params(model_params, tqdm_disable=False):
             - "n_basis" (int, optional): Number of basis functions (default: 10)
             - "centers" (str, optional): Center initialization method (default: "random")
             - "regressor": Base regressor for expanding (default: Ridge())
+            - "sigmas" (str, optional): Per-edge sigma method (default: "none").
+              One of "none", "edge_isolated_swim_sigmas", "neuron_shared_swim_sigmas".
+              Pair with the matching SWIM "centers" method (and the same
+              "random_seed") so sigmas are derived from the same selected
+              pairs as the centers -- see hkan.hkan.make_sigmas.
+            - "sigma_scale" (float, optional): Scale factor for sigma = sigma_scale /
+              |x_a - x_b| (default: 1.0). sigma_min and sigma_max are derived
+              internally from the data's pair-distance distribution.
+            - "random_seed" (int, optional): Seed shared by centers and
+              sigmas for this layer (default: module-level hkan.random_seed).
         tqdm_disable (bool): Disable progress bars during training (default: False)
 
     Returns:
@@ -76,6 +86,9 @@ def build_hkan_from_params(model_params, tqdm_disable=False):
         n_basis = p.get("n_basis", 10)
         centers = p.get("centers", "random")
         reg = p.get("regressor", Ridge())
+        sigmas = p.get("sigmas", "none")
+        sigma_scale = p.get("sigma_scale", 1.0)
+        random_seed = p.get("random_seed", None)
 
         if layer_idx == 0:
             # Create first layer with specified parameters
@@ -86,6 +99,9 @@ def build_hkan_from_params(model_params, tqdm_disable=False):
                 n_basis=n_basis,
                 centers=centers,
                 expanding_base_regressor=reg,
+                sigmas=sigmas,
+                sigma_scale=sigma_scale,
+                random_seed=random_seed,
             )
         else:
             # Stack additional layers on top of existing model
@@ -99,6 +115,9 @@ def build_hkan_from_params(model_params, tqdm_disable=False):
                 n_basis=n_basis,
                 centers=centers,
                 expanding_base_regressor=reg,
+                sigmas=sigmas,
+                sigma_scale=sigma_scale,
+                random_seed=random_seed,
             )
     return model
 
@@ -889,10 +908,10 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test, n_trials=
         best_idx = trials_df['value'].idxmin()
         best_row = trials_df.loc[best_idx]
 
-        width = int(best_row['params_width'])
-        M = int(best_row['params_M'])
-        G = int(best_row['params_G'])
-        T = int(best_row['params_T'])
+        width = int(best_row['params_width']) # type: ignore
+        M = int(best_row['params_M']) # type: ignore
+        G = int(best_row['params_G']) # type: ignore
+        T = int(best_row['params_T']) # type: ignore
 
         print(f"Best CV Validation RMSE: {best_row['value']:.6f}")
         print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
