@@ -118,74 +118,26 @@ def make_centers(n_vars_out, n_vars_in, n_basis, centers, X=None, y=None, M=None
             raise ValueError(
                 "X cannot be None for creating centers using random_data_points method."
             )
-    # SWIM: one candidate pool per output neuron (q), distinct pairs per edge.
-    # Efficient (1 SWIM call per q) but may confound dimensions since scored on full-D distance.
+    # SWIM centers: see hkan_swim.py for edge_isolated vs neuron_shared trade-offs.
+    # Only the centers half is used here; sigmas (if requested) are computed
+    # together with centers in one call, inside ExpandingLayer.fit().
     elif centers == "neuron_shared_swim_centers":
-        return hsc.neuron_shared_swim_centers(
-            X, y, M, n_vars_out, n_vars_in, n_basis, random_seed=random_seed
+        centers_arr, _ = hsc.neuron_shared_swim(
+            X, y, M, n_vars_out, n_vars_in, n_basis,
+            random_seed=random_seed, use_swim_sigma=False,
         )
-    # SWIM: independent candidates per edge (q,p), scored using only column p.
-    # Avoids cross-dimension confounding but more expensive (n_vars_in SWIM calls).
+        return centers_arr
     elif centers == "edge_isolated_swim_centers":
-        return hsc.edge_isolated_swim_centers(
-            X, y, M, n_vars_out, n_vars_in, n_basis, random_seed=random_seed
+        centers_arr, _ = hsc.edge_isolated_swim(
+            X, y, M, n_vars_out, n_vars_in, n_basis,
+            random_seed=random_seed, use_swim_sigma=False,
         )
+        return centers_arr
 
     else:
         raise ValueError(
             "Possible values for 'centers' are: 'random', 'equally_spaced', 'random_data_points', "
             "'neuron_shared_swim_centers', 'edge_isolated_swim_centers'."
-        )
-
-
-def make_sigmas(n_vars_out, n_vars_in, n_basis, sigmas, X=None, y=None, M=None,
-                 random_seed=None, sigma_scale=1.0):
-    """
-    Generate per-(output, input, basis) sigma (sharpness) values.
-
-    Parameters:
-    - n_vars_out, n_vars_in, n_basis: same meaning as in make_centers.
-    - sigmas: Sigma generation method. Options:
-        - 'none': No per-edge sigmas -- ExpandingLayer falls back to the
-          scalar `s` baked into basis_fn (original HKAN behavior).
-        - 'edge_isolated_swim_sigmas': Paired with 'edge_isolated_swim_centers'.
-          MUST be called with the same random_seed as the matching centers
-          call to derive sigma from the identical selected pairs.
-        - 'neuron_shared_swim_sigmas': Paired with 'neuron_shared_swim_centers'.
-          Same random_seed requirement as above.
-    - X, y, M: same meaning as in make_centers.
-    - random_seed: Seed for SWIM variants. Falls back to the module-level
-      `random_seed` if None. Must match the seed used for the paired
-      centers method for the pairing guarantee to hold.
-    - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|.
-      sigma_min and sigma_max are derived internally from the data's
-      pair-distance distribution. sigma_scale is an uncalibrated hyperparameter
-      by default -- tune it or calibrate it against the basis_fn's `s` you're
-      comparing against rather than leaving it at 1.0.
-
-    Returns:
-    - Sigmas array of shape (n_vars_out, n_vars_in, n_basis), or None if
-      sigmas == 'none'.
-    """
-    if random_seed is None:
-        random_seed = globals()["random_seed"]
-
-    if sigmas == "none":
-        return None
-    elif sigmas == "edge_isolated_swim_sigmas":
-        return hsc.edge_isolated_swim_sigmas(
-            X, y, M, n_vars_out, n_vars_in, n_basis,
-            random_seed=random_seed, sigma_scale=sigma_scale
-        )
-    elif sigmas == "neuron_shared_swim_sigmas":
-        return hsc.neuron_shared_swim_sigmas(
-            X, y, M, n_vars_out, n_vars_in, n_basis,
-            random_seed=random_seed, sigma_scale=sigma_scale
-        )
-    else:
-        raise ValueError(
-            "Possible values for 'sigmas' are: 'none', "
-            "'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas'."
         )
 
 
@@ -230,7 +182,8 @@ class ExpandingLayer(TransformerMixin, BaseEstimator):
         base_regressor=None,
         sigmas="none",
         sigma_scale=1.0,
-        random_seed=None,
+        fixed_sigma=1.0,
+        random_seed=42,
     ):
         """
         Initialize the ExpandingLayer.
@@ -241,16 +194,21 @@ class ExpandingLayer(TransformerMixin, BaseEstimator):
         - centers: Method to determine the centers of the basis functions.
         - basis_fn: Basis function to use, default is sigmoid.
         - base_regressor: Base regressor to use, default is LinearRegression.
-        - sigmas: Method to determine per-edge sigmas ('none',
-          'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas'). 'none'
-          reproduces the original HKAN behavior (scalar s from basis_fn).
-          Pair 'edge_isolated_swim_sigmas' with centers=
-          'edge_isolated_swim_centers' (and likewise for neuron_shared) so
-          sigmas are derived from the same selected pairs as the centers.
-        - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|.
-          sigma_min and sigma_max are derived internally from the data.
-        - random_seed: Seed used for both centers and sigmas when either is
-          a SWIM variant. Falls back to the module-level random_seed if None.
+        - sigmas: Method to determine per-edge sigmas. One of:
+            - 'none': no per-edge sigma array; sharpness comes only from
+              basis_fn's own scalar `s`. Works with any centers method.
+            - 'fixed': every basis function gets the constant `fixed_sigma`.
+              Works with any centers method (no pair information needed).
+            - 'edge_isolated_swim_sigmas' / 'neuron_shared_swim_sigmas':
+              sigma derived from each selected pair's own distance. Requires
+              centers to be the matching SWIM method
+              ('edge_isolated_swim_centers' / 'neuron_shared_swim_centers') --
+              centers and sigmas are computed together in one call, so they
+              are guaranteed to come from the same selected pairs.
+        - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|,
+          used by the two SWIM sigma variants. sigma_min/sigma_max are
+          derived internally from the data's pair-distance distribution.
+        - fixed_sigma: Constant sigma value used when sigmas == 'fixed'.
         """
         self.n_vars_out = n_vars_out
         self.n_basis = n_basis
@@ -259,6 +217,7 @@ class ExpandingLayer(TransformerMixin, BaseEstimator):
         self.base_regressor = base_regressor
         self.sigmas = sigmas
         self.sigma_scale = sigma_scale
+        self.fixed_sigma = fixed_sigma
         self.random_seed = random_seed
 
     def fit(self, X, y=None):
@@ -278,10 +237,48 @@ class ExpandingLayer(TransformerMixin, BaseEstimator):
 
         self.n_samples_, self.n_vars_in_ = X.shape
 
-        self.centers_arr_ = make_centers(
-            self.n_vars_out, self.n_vars_in_, self.n_basis, self.centers, X, y,
-            random_seed=self.random_seed,
-        )
+        swim_fns = {
+            "edge_isolated_swim_centers": hsc.edge_isolated_swim,
+            "neuron_shared_swim_centers": hsc.neuron_shared_swim,
+        }
+
+        if self.sigmas in ("none", "fixed"):
+            # Both cases use the same centers computation -- they only
+            # differ in what sigmas_arr_ ends up being.
+            self.centers_arr_ = make_centers(
+                self.n_vars_out, self.n_vars_in_, self.n_basis, self.centers, X, y,
+                random_seed=self.random_seed,
+            )
+            if self.sigmas == "none":
+                self.sigmas_arr_ = None
+            else:
+                self.sigmas_arr_ = np.full(
+                    (self.n_vars_out, self.n_vars_in_, self.n_basis), self.fixed_sigma
+                )
+
+        elif self.sigmas in ("edge_isolated_swim_sigmas", "neuron_shared_swim_sigmas"):
+            # Real SWIM-derived sigma needs the selected pairs, so centers
+            # MUST be the matching SWIM method. Centers + sigmas are computed
+            # together in one call, guaranteeing they come from the same pairs.
+            if self.centers not in swim_fns:
+                raise ValueError(
+                    f"sigmas={self.sigmas!r} requires centers to be "
+                    "'edge_isolated_swim_centers' or 'neuron_shared_swim_centers'; "
+                    f"got centers={self.centers!r}."
+                )
+            self.centers_arr_, self.sigmas_arr_ = swim_fns[self.centers](
+                X, y, None, self.n_vars_out, self.n_vars_in_, self.n_basis,
+                random_seed=self.random_seed, use_swim_sigma=True,
+                sigma_scale=self.sigma_scale,
+            )
+
+        else:
+            raise ValueError(
+                f"Unrecognized sigmas={self.sigmas!r}. Possible values are "
+                "'none', 'fixed', 'edge_isolated_swim_sigmas', "
+                "'neuron_shared_swim_sigmas'."
+            )
+
         assert self.centers_arr_.shape == (
             self.n_vars_out,
             self.n_vars_in_,
@@ -291,10 +288,6 @@ class ExpandingLayer(TransformerMixin, BaseEstimator):
             f"expected {(self.n_vars_out, self.n_vars_in_, self.n_basis)}"
         )
 
-        self.sigmas_arr_ = make_sigmas(
-            self.n_vars_out, self.n_vars_in_, self.n_basis, self.sigmas, X, y,
-            random_seed=self.random_seed, sigma_scale=self.sigma_scale
-        )
         if self.sigmas_arr_ is not None:
             assert self.sigmas_arr_.shape == (
                 self.n_vars_out,
@@ -438,6 +431,7 @@ def make_hkan_layer(
     connecting_base_regressor=None,
     sigmas="none",
     sigma_scale=1.0,
+    fixed_sigma=1.0,
     random_seed=None,
 ):
     """
@@ -451,11 +445,16 @@ def make_hkan_layer(
     - basis_fn: Basis function to use.
     - expanding_base_regressor: Base regressor for ExpandingLayer.
     - connecting_base_regressor: Base regressor for ConnectingLayer.
-    - sigmas: Method for per-edge sigma selection ('none',
-      'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas'). Pair with
-      the matching SWIM centers method for the pairing guarantee to hold.
-    - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|.
-      sigma_min and sigma_max are derived internally from the data.
+    - sigmas: Method for per-edge sigma selection ('none', 'fixed',
+      'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas'). Whenever this
+      is not 'none', centers must be the matching SWIM method
+      ('edge_isolated_swim_centers' or 'neuron_shared_swim_centers') -- the
+      merged hsc function is called once internally, so centers/sigmas are
+      guaranteed paired from the same selected pairs.
+    - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|, used
+      by the two SWIM sigma variants. sigma_min/sigma_max are derived
+      internally from the data.
+    - fixed_sigma: Constant sigma value used when sigmas == 'fixed'.
     - random_seed: Seed shared by centers and sigmas for this layer.
 
     Returns:
@@ -472,6 +471,7 @@ def make_hkan_layer(
                 base_regressor=expanding_base_regressor,
                 sigmas=sigmas,
                 sigma_scale=sigma_scale,
+                fixed_sigma=fixed_sigma,
                 random_seed=random_seed,
             ),
         ),
@@ -495,6 +495,7 @@ def extend_hkan(
     connecting_base_regressor=None,
     sigmas="none",
     sigma_scale=1.0,
+    fixed_sigma=1.0,
     random_seed=None,
 ):
     """
@@ -509,10 +510,12 @@ def extend_hkan(
     - basis_fn: Basis function to use, default is sigmoid.
     - expanding_base_regressor: Base regressor for the expanding layer.
     - connecting_base_regressor: Base regressor for the connecting layer.
-    - sigmas: Method for per-edge sigma selection ('none',
-      'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas').
+    - sigmas: Method for per-edge sigma selection ('none', 'fixed',
+      'edge_isolated_swim_sigmas', 'neuron_shared_swim_sigmas'). See
+      ExpandingLayer/make_hkan_layer for the centers-pairing requirement.
     - sigma_scale: Scale factor for sigma = sigma_scale / |x_a - x_b|.
       sigma_min and sigma_max are derived internally from the data.
+    - fixed_sigma: Constant sigma value used when sigmas == 'fixed'.
     - random_seed: Seed shared by centers and sigmas for this layer.
 
     Returns:
@@ -531,6 +534,7 @@ def extend_hkan(
         connecting_base_regressor=connecting_base_regressor,
         sigmas=sigmas,
         sigma_scale=sigma_scale,
+        fixed_sigma=fixed_sigma,
         random_seed=random_seed,
     )
 
