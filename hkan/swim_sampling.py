@@ -65,6 +65,10 @@ def create_swim_probabilities(x_a, x_b, y_a, y_b, dist_min=1e-10):
     Returns:
         probs: Normalized sampling probabilities, shape (M,), summing to 1.
     """
+    # Adjust shape
+    y_a = y_a.reshape(-1, 1)
+    y_b = y_b.reshape(-1, 1)
+
     # Compute output space differences (gradient components)
     dy = y_b - y_a
 
