@@ -26,3 +26,4 @@ build/
 *.skill
 
 .claude/
+sgkan_outdated/

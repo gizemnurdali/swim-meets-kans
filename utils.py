@@ -27,14 +27,15 @@ sys.path.insert(0, os.path.join(base_path, 'sgkan'))
 
 import evaluation_metrics as em
 from kan import KAN  # type: ignore
-from sgkan import surrogate_guided_kan as sgkan
-from sgkan import gaussian_process_models as gp
+from sgkan_outdated import surrogate_guided_kan as sgkan
+from sgkan_outdated import gaussian_process_models as gp
 from hkan.hkan import (
     make_hkan_layer, extend_hkan, set_tqdm_disable,
 )
 
 torch.set_default_dtype(torch.float64)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 
 # ─── HKAN Utilities ────────────────────────────────────────────
