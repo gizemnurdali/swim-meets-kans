@@ -1,34 +1,51 @@
-# Swim Meets KAN
+# SWIM Meets KANs
 
-A research project combining data-driven approaches from SWIM networks with Kolmogorov-Arnold Networks (KAN).
+Data-driven Sampling for Kolmogorov-Arnold Network Training Without Gradient Descent.
 
 ## Overview
 
-This repository integrates implementations and research from multiple papers:
+This repository unifies KAN, SWIM, and HKAN implementations and includes a new proposed framework for the SWIM-Guided KAN (SG-KAN) algorithm:
 
-- **hkan**: Hierarchical Kolmogorov-Arnold Networks implementation
-- **swim**: Swimming networks - data-driven approach for network analysis
-- **pykan**: Pure Python implementation of Kolmogorov-Arnold Networks
-- **swimnetworks**: SWIM networks implementation and research
+- **data**: Datasets from the HKAN paper (5 synthetic test functions and 18 real-world benchmarks), plus saved Optuna search results and 50-seed run outputs
+- **hkan**: Original Hierarchical Kolmogorov-Arnold Networks (HKAN) source code
+- **sgkan**: New proposed algorithm (SWIM-Guided KAN)
+- **pykan**: Original KAN implementation by Liu et al.
+- **swimnetworks-paper**: Original SWIM networks paper implementation
 
 ## Motivation
 
-The project explores combining SWIM's data-driven methodology with PyKAN's function approximation capabilities using KAN-based architectures. The goal is to leverage the strengths of both approaches for improved network modeling and analysis.
+The project explores combining SWIM's data-driven methodology with KAN's network. The goal is to leverage the strengths of both approaches for improved network modeling and analysis.
 
-## Key Resources
+## Key resources to look at
 
-- **hkan/re-running-of-hkan.ipynb**: Sanity checks and validation of the HKAN source code implementation
-- **swimnetworks-paper/**: Jupyter notebooks including:
-  - Sanity checks and validation of the SWIM network implementation
-  - Explorations of Gaussian Process (GP) theory and mechanics
-  - PyTorch tutorials for understanding network operations
+**hkan/**: Original Hierarchical Kolmogorov-Arnold Networks (HKAN) source code
+- `hkan.py`: original HKAN model implementation
+- `hkan_sanity_check.ipynb`: sanity check and preliminary analysis of the official HKAN implementation (depth vs. expressivity, center selection behavior)
+
+**swimnetworks-paper/**:
+- `swim_sanity_check.ipynb`: sanity check of the official SWIM implementation
+
+**sgkan/**: new proposed algorithm
+- `sgkan_model.py`: reusable SG-KAN implementation (SWIM pair sampling, local point collection, edge kernel construction, edge/neuron-level ridge regression)
+- `sgkan_notebook.ipynb`: original notebook where the algorithm was built and prototyped from scratch, step by step; `sgkan_model.py` is the script version for reuse in the benchmark notebooks
+
+**Root-level scripts**:
+- `datasets.py`: loads the synthetic TF and real-world datasets from `data/`
+- `evaluation_metrics.py`: shared MAE/RMSE evaluation utilities used by all three models
+- `swim.py`: core SWIM pair-sampling implementation (candidate pair sampling, SWIM probabilities, pair selection)
+- `utils.py`: build/fit utilities for KAN and HKAN, including the Optuna hyperparameter search for KAN
+- `visualize.py`: plotting helpers for inspecting HKAN/SG-KAN block functions and per-layer R²
+
+**Root-level notebooks**:
+- `hkan_model_paper_reproduction_tf1_tf5.ipynb`: reproduces HKAN's results on TF1–TF5 using the paper's reported hyperparameter configurations, compared against their published numbers
+- `kan_hkan_benchmark_tf1_tf5.ipynb`: benchmarks KAN (Optuna-searched architecture with grid extension) against HKAN across TF1–TF5
+- `sgkan_experiments_tf1_tf5.ipynb`: TODO: update here later, will be similar to the optuna work
 
 ## Contributions
 
 This repository combines and validates implementations from multiple foundational papers:
 - Validation and sanity checks of HKAN and SWIM source codes
-- Educational notebooks exploring Gaussian Processes and PyTorch fundamentals
-- Integration framework for combining SWIM's data-driven approach with KAN architectures
+- New proposed algorithm (SG-KAN) combining SWIM's data-driven approach with KAN architectures
 
 ## Getting Started
 
