@@ -47,7 +47,7 @@ def collect_local_gen(X, y, p, lo, hi, min_points=5, max_points=1000, k_fallback
         knn_idx = order[:k_fallback]
         return x_p[knn_idx], y[knn_idx], "knn_fallback"
     
-# GP - Like kernel functions
+# Kernel functions
 def rbf_kernel(x1, x2, l_p):
     """RBF function"""
     r2 = (x1[:, None] - x2[None, :]) ** 2
@@ -75,7 +75,7 @@ def apply_kernel(x1, x2, l_p, kernel_type="rbf", period=1.0):
     else:
         raise ValueError(f"Unknown kernel_type: {kernel_type}")
     
-# MODEL SETUP
+# SGKAN MODEL SETUP
 # Model wrapper
 class SGKANModel:
     """Thin wrapper of sgkan functions."""
@@ -103,7 +103,7 @@ class SGKANModel:
 
 # Kernel matrix creation
 def build_edge_features(local_x_p, lo, hi, num_inducing=15, sigma_scale=1.0, seed=0,
-    kernel_type="rbf", period=1.0, lengthscale_method="range"):
+    kernel_type="rbf", period=1.0):
 
     n = local_x_p.shape[0]
     n_ind = min(num_inducing, n)
@@ -113,65 +113,64 @@ def build_edge_features(local_x_p, lo, hi, num_inducing=15, sigma_scale=1.0, see
     idx = rng.choice(n, size=n_ind, replace=False)
     z_p = np.sort(local_x_p[idx])
 
-    if lengthscale_method == "median_trick":
-        # Median heuristic: set lengthscale from the typical pairwise distance in the local data
-        diffs = np.abs(local_x_p[:, None] - local_x_p[None, :])
-        mask_diag = ~np.eye(n, dtype=bool)
-        l_p = sigma_scale * np.median(diffs[mask_diag]) if n > 1 else sigma_scale
-        l_p = max(l_p, 1e-6) # fallback for degenerated case
-    elif lengthscale_method == "range":
-        # Lengthscale derived directly from the SWIM-selected interval width,
-        # NOT from the median pairwise distance of the (possibly capped) local subset.
-        l_p = sigma_scale * (hi - lo)
-        l_p = max(l_p, 1e-6)  # guard against degenerate (near-zero-width) intervals
-    else: 
-        raise ValueError("please select lengthscale_method as median_trick or range")
+    # Lengthscale derived directly from the SWIM-selected interval width,
+    l_p = sigma_scale * (hi - lo)
+    l_p = max(l_p, 1e-6)  # guard against degenerate (near-zero-width) intervals
+
     # Evaluate the kernel between every training point and the inducing points
     k_local = apply_kernel(local_x_p, z_p, l_p, kernel_type=kernel_type, period=period)
 
     return k_local, z_p, l_p
 
-# Fit SGKAN layer: one Ridge regression for per edge (p), one for neuron (q)
 def fit_layer(
     X, y, layer_width, pair_selection_strategy="swim", num_inducing=15,
-    lengthscale_method="range", sigma_scale=1.0, alpha_edge=1e-3, alpha_neuron=1e-3,
+    sigma_scale=1.0, alpha_edge=1e-3, alpha_neuron=1e-3,
     seed=0, kernel_type="rbf", period=1.0, max_local_points=1000):
 
     # Number of data points and features
     N, D_in = X.shape[0], X.shape[1]
+
+    # Algorithm 1: Adapting SWIM to Per-Dimension Intervals
+    # For benchmarking purposes: put random sampling condition for comparison
     # Select data pairs using swim or random
     if pair_selection_strategy == "swim":
         x_a, x_b, y_a, y_b = select_swim_pairs_gen(X, y, layer_width, random_seed=seed)
-    elif pair_selection_strategy == "random":
+    elif pair_selection_strategy == "random": # sample pairs randomly without swim
         x_a, x_b, y_a, y_b = ss.sample_candidate_pairs(X, y, layer_width, random_seed=seed)
     else:
         raise ValueError("please select pair_selection method as swim or random")
     print(f"[fit_layer] pair_selection_strategy = '{pair_selection_strategy}' "
           f"(layer_width={layer_width}, D_in={D_in})")
     
-    # Create an empty hidden layer output matrix
+
+    # Create an empty hidden layer output matrix H
     H = np.zeros((N, layer_width))
     neurons = []
     method_counts = Counter()
     eps = 1e-8
-    # Fit a Ridge model for each neuron, combining its incoming edge signals
+
     for q in range(layer_width):
         edge_outputs, edge_params = [], []
         for p in range(D_in):
+            # Create swim projection interval bounds
             lo = min(x_a[q, p], x_b[q, p])
             hi = max(x_a[q, p], x_b[q, p])
+            
+            # Algorithm 2: Local Point Collection
             local_x_p, local_y, method = collect_local_gen(
                 X, y, p, lo, hi, max_points=max_local_points,
                 cap_seed=seed + q * D_in + p
             )
             method_counts[method] += 1
 
-            # Stage 1: pick inducing points z_p from the local subset (x-only, no y).
+            # Algorithm 3: Building the Edge Kernel Matrix
+            # Pick inducing points z_p from the local subset (x-only, no y)
+            # Compute kernel matrix using collected local and inducing points
             k_local, z_p, l_p = build_edge_features(
                 local_x_p, lo, hi, num_inducing=num_inducing,
                 sigma_scale=sigma_scale, seed=seed + q, kernel_type=kernel_type,
-                period=period, lengthscale_method=lengthscale_method
-            )
+                period=period)
+            
             if pair_selection_strategy == "swim":
                 # Dimension-specific SWIM score for Ridge Regressor penalization
                 dx = abs(x_b[q, p] - x_a[q, p])
@@ -182,16 +181,20 @@ def fit_layer(
             else: 
                 alpha_edge_p = alpha_edge
 
-            # Fit ridge k_local and l_p are now consistent
+            # Algorithm 4: Edge-level Ridge Regression
             edge_model = Ridge(alpha=alpha_edge_p, fit_intercept=False)
             edge_model.fit(k_local, local_y)
             w_p = edge_model.coef_
 
             # Evaluate this edge on the full training set, using the SAME l_p as fit
+            # Kernel similarity between points and the fixed inducing points
             k_train = apply_kernel(X[:, p], z_p, l_p, kernel_type=kernel_type, period=period)
+            # Weighted sum -> this edge's output for each query point
+            # Store fixed paramaters to use it later
             edge_outputs.append(k_train @ w_p)
             edge_params.append({"z_p": z_p, "l_p": l_p, "w_p": w_p})
-        
+
+        # Algorithm 5: Neuron Construction
         # (N, D_in) -- one column per edge output, each column denotes one edge result
         edge_outputs = np.column_stack(edge_outputs)
 
@@ -205,17 +208,11 @@ def fit_layer(
             "kernel_type": kernel_type, "period": period,
         })
 
+    # Observe local point collection methods distribution
     total_edges = layer_width * D_in
     print(f"[fit_layer] local-window method counts over {total_edges} edges: "
           f"{dict(method_counts)}")
     return H, neurons
-
-# Transform SGKAN
-def edge_function(x_p_query, z_p, l_p, w_p, kernel_type="rbf", period=1.0):
-    # Kernel similarity between query points and the FIXED inducing points from training
-    k = apply_kernel(x_p_query, z_p, l_p, kernel_type=kernel_type, period=period)
-    # Weighted sum -> this edge's output for each query point
-    return k @ w_p
 
 def transform_layer(X_new, neurons):
 
@@ -229,8 +226,10 @@ def transform_layer(X_new, neurons):
         edge_outputs = []
         for p, ep in enumerate(neuron["edge_params"]):
             # Recompute this edge's output on X_new, using the stored (fixed) z_p, l_p, w_p
+            # Kernel similarity between query points and the fixed inducing points from training
             k = apply_kernel(X_new[:, p], ep["z_p"], ep["l_p"],
                               kernel_type=neuron["kernel_type"], period=neuron["period"])
+            # Weighted sum -> this edge's output for each query point
             edge_outputs.append(k @ ep["w_p"])
         edge_outputs = np.column_stack(edge_outputs)
 
@@ -248,7 +247,7 @@ def sgkan_layer_step(
     # Fit layer
     H, neurons = fit_layer(
         X, y, layer_width, pair_selection_strategy=pair_selection_strategy,
-        num_inducing=num_inducing, lengthscale_method=lengthscale_method, sigma_scale=sigma_scale,
+        num_inducing=num_inducing, sigma_scale=sigma_scale,
         alpha_edge=alpha_edge, alpha_neuron=alpha_neuron, seed=seed,
         kernel_type=kernel_type, period=period, max_local_points=max_local_points)
 
@@ -280,3 +279,4 @@ def build_sgkan_stack(X_train, y_train, layer_configs):
     # last stage phi values are equivalent to the predicted y
     yhat = stages[-1][2].ravel()
     return stages, yhat, layer_neurons
+ 

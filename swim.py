@@ -100,7 +100,7 @@ def select_pairs(x_a, x_b, y_a, y_b, probs, layer_width, random_seed=42):
     """
     Select layer_width winning pairs from candidates using SWIM probabilities.
 
-    Samples pairs with replacement according to their SWIM scores (higher-scored
+    Samples pairs without replacement according to their SWIM scores (higher-scored
     pairs are more likely to be selected). Allows the same pair to be selected
     multiple times.
 
@@ -138,33 +138,3 @@ def select_pairs(x_a, x_b, y_a, y_b, probs, layer_width, random_seed=42):
     y_b_selected = y_b[selected_idx]
 
     return x_a_selected, x_b_selected, y_a_selected, y_b_selected, selected_idx
-
-
-def combine(X_train, y_train, n_vars_out, M=None, random_seed=42):
-    """
-    Full SWIM pipeline: sample candidates, score by gradient magnitude, select winners.
-
-    Args:
-        X_train: Input training data, shape (N, D).
-        y_train: Target training data, shape (N,) or (N, D_y).
-        n_vars_out: Number of pairs to select (e.g., number of neurons).
-        M: Number of candidate pairs to generate. Defaults to N.
-        random_seed: For reproducibility.
-
-    Returns:
-        x_a_selected: Selected start points, shape (n_vars_out, D).
-        x_b_selected: Selected end points, shape (n_vars_out, D).
-        y_a_selected: Target values at x_a, shape (n_vars_out,) or (n_vars_out, D_y).
-        y_b_selected: Target values at x_b, shape (n_vars_out,) or (n_vars_out, D_y).
-        selected_idx: Indices of selected pairs in original candidates, shape (n_vars_out,).
-    """
-    # Stage 1: Generate M candidate pairs via delta-offset sampling
-    x_a, x_b, y_a, y_b = sample_candidate_pairs(X_train, y_train, M, random_seed)
-    # Stage 2: Score candidates by gradient magnitude
-    probs = create_swim_probabilities(x_a, x_b, y_a, y_b)
-    # Stage 3: Select n_vars_out informative pairs (with replacement) per SWIM probabilities
-    x_a_selected, x_b_selected, y_a_selected, y_b_selected, selected_idx = select_pairs(
-        x_a, x_b, y_a, y_b, probs, n_vars_out, random_seed
-    )
-
-    return x_a_selected, x_b_selected, y_a_selected, y_b_selected, selected_idx 
