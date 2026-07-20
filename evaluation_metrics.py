@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import time
 
 
 def to_tensor(arr, dtype=torch.float64):
@@ -87,21 +88,28 @@ def evaluate(model, X_train, y_train, X_test, y_test):
         y_test: Test target data
 
     Returns:
-        dict: Results with structure {'train': {'mae': float, 'rmse': float},
-                                     'test': {'mae': float, 'rmse': float}}
+        dict: Results with structure {'train': {'mae': float, 'rmse': float, 'inference_time_secs': float},
+                                     'test': {'mae': float, 'rmse': float, 'inference_time_secs': float}}
     """
+    start = time.perf_counter()
     y_train_pred = model.predict(X_train)
+    train_time = time.perf_counter() - start
+
+    start = time.perf_counter()
     y_test_pred = model.predict(X_test)
+    test_time = time.perf_counter() - start
 
     # Each metric function handles type conversion internally
     results = {
         "train": {
             "mae": compute_mae(y_train_pred, y_train).item(),
             "rmse": compute_rmse(y_train_pred, y_train).item(),
+            "inference_time_secs": train_time,
         },
         "test": {
             "mae": compute_mae(y_test_pred, y_test).item(),
             "rmse": compute_rmse(y_test_pred, y_test).item(),
+            "inference_time_secs": test_time,
         }
     }
 
@@ -113,8 +121,8 @@ def print_results(results):
     Pretty-print evaluation results in a small table.
 
     Args:
-        results: Dict with structure {'train': {'mae': float, 'rmse': float},
-                                     'test': {'mae': float, 'rmse': float}}
+        results: Dict with structure {'train': {'mae': float, 'rmse': float, 'inference_time_secs': float},
+                                     'test': {'mae': float, 'rmse': float, 'inference_time_secs': float}}
     """
     print(f"{'Metric':<15} {'Train':<20} {'Test':<20}")
     print("-" * 55)
@@ -123,4 +131,9 @@ def print_results(results):
         train_val = results["train"][metric]
         test_val = results["test"][metric]
         print(f"{metric.upper():<15} {train_val:<20.6e} {test_val:<20.6e}")
+
+    print("-" * 55)
+    train_time = results["train"]["inference_time_secs"]
+    test_time = results["test"]["inference_time_secs"]
+    print(f"{'Inference (s)':<15} {train_time:<20.6f} {test_time:<20.6f}")
 

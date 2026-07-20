@@ -1,3 +1,4 @@
+"""Original source code of HKAN paper."""
 import itertools
 import tqdm
 
@@ -80,16 +81,11 @@ def make_centers(n_vars_out, n_vars_in, n_basis, centers, X=None):
     elif centers == "equally_spaced":
         return np.tile(np.linspace(0, 1, n_basis), (n_vars_out, n_vars_in, 1))
     elif centers == "random_data_points":
-        if X is not None:
-            C = np.empty((n_vars_out, n_vars_in, n_basis))
-            for q in range(n_vars_out):
-                for p in range(n_vars_in):
-                    C[q, p, :] = np.random.choice(X[:, p], n_basis)
-            return C
-        else:
-            raise ValueError(
-                "X cannot be None for creating centers using random_data_points method."
-            )
+        C = np.empty((n_vars_out, n_vars_in, n_basis))
+        for q in range(n_vars_out):
+            for p in range(n_vars_in):
+                C[q, p, :] = np.random.choice(X[:, p], n_basis)
+        return C
     else:
         raise ValueError(
             "Possible values for 'centers' are 'random', 'equally_spaced', or 'random_data_points'."

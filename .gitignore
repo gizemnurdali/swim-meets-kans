@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.vscode/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -25,3 +26,4 @@ build/
 *.skill
 
 .claude/
+sgkan_outdated/
