@@ -320,6 +320,10 @@ def objective_kan(trial, X_train, y_train, X_test, y_test, n_splits=5):
     # Store test RMSE as user attribute (will appear in trials dataframe)
     trial.set_user_attr("test_rmse", test_rmse)
     trial.set_user_attr("val_rmse", avg_val_rmse)
+    trial.set_user_attr("grids", str((5, 10, 20)))
+    trial.set_user_attr("steps_per_grid", 50)
+    trial.set_user_attr("opt", "LBFGS")
+    trial.set_user_attr("lamb", 1e-3)
     
     # Return validation RMSE for optimization
     return avg_val_rmse
@@ -372,7 +376,14 @@ def study_optuna_kan(dataset_name, X_train, y_train, X_test, y_test, n_trials=10
         print(f"\nAll {len(trials_df)} trials:")
         print(trials_df[['number', 'value', 'params_width_idx', 'val_rmse', 'test_rmse']].to_string())
 
-        return {"width_idx": width_idx, "architecture": best_arch}
+        return {
+            "width_idx": width_idx,
+            "architecture": best_arch,
+            "grids": (5, 10, 20),
+            "steps_per_grid": 50,
+            "opt": "LBFGS",
+            "lamb": 1e-3,
+        }
 
     # Run optimization if results don't exist
     print("=" * 70)
@@ -407,15 +418,28 @@ def study_optuna_kan(dataset_name, X_train, y_train, X_test, y_test, n_trials=10
 
     trials_df = study.trials_dataframe()
     print(f"\nAll {len(trials_df)} trials:")
-    print(trials_df[['number', 'value', 'params_width_idx', 'user_attrs_val_rmse', 'user_attrs_test_rmse']].to_string())
+    print(trials_df[['number', 'value', 'params_width_idx', 'user_attrs_val_rmse',
+                      'user_attrs_test_rmse', 'user_attrs_grids', 'user_attrs_steps_per_grid',
+                      'user_attrs_opt', 'user_attrs_lamb']].to_string())
 
     # Rename columns and save to CSV for future reference
     trials_df = trials_df.rename(columns={
         "user_attrs_test_rmse": "test_rmse",
         "user_attrs_val_rmse": "val_rmse",
+        "user_attrs_grids": "grids",
+        "user_attrs_steps_per_grid": "steps_per_grid",
+        "user_attrs_opt": "opt",
+        "user_attrs_lamb": "lamb",
     })
     trials_df['duration'] = trials_df['duration'].dt.total_seconds()
     trials_df.to_csv(csv_path, index=False)
 
     best_idx = study.best_params['width_idx']
-    return {"width_idx": best_idx, "architecture": width_options[best_idx]}
+    return {
+        "width_idx": best_idx,
+        "architecture": width_options[best_idx],
+        "grids": (5, 10, 20),
+        "steps_per_grid": 50,
+        "opt": "LBFGS",
+        "lamb": 1e-3,
+    }
