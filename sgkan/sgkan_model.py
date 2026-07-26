@@ -172,12 +172,13 @@ def fit_layer(
                 period=period)
             
             if pair_selection_strategy == "swim":
-                # Dimension-specific SWIM score for Ridge Regressor penalization
-                dx = abs(x_b[q, p] - x_a[q, p])
-                dy = abs(y_b[q] - y_a[q])
-                dim_score = dy / (dx + eps)
-                # If dim_score is small then penalize more
-                alpha_edge_p = max(alpha_edge / (1 + dim_score), 1e-8)
+                # # Dimension-specific SWIM score for Ridge Regressor penalization
+                # dx = abs(x_b[q, p] - x_a[q, p])
+                # dy = abs(y_b[q] - y_a[q])
+                # dim_score = dy / (dx + eps)
+                # # If dim_score is small then penalize more
+                # alpha_edge_p = max(alpha_edge / (1 + dim_score), 1e-8)
+                alpha_edge_p = alpha_edge
             else: 
                 alpha_edge_p = alpha_edge
 
