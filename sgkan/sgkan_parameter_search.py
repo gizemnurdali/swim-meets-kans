@@ -122,10 +122,10 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
         best_idx = trials_df['value'].idxmin()
         best_row = trials_df.loc[best_idx]
 
-        best_layer_width = int(best_row['params_layer_width'])
-        best_num_inducing = int(best_row['params_num_inducing'])
-        best_alpha_edge = float(best_row['params_alpha_edge'])
-        best_alpha_neuron = float(best_row['params_alpha_neuron'])
+        best_layer_width = int(best_row['params_layer_width']) # type: ignore
+        best_num_inducing = int(best_row['params_num_inducing']) # type: ignore
+        best_alpha_edge = float(best_row['params_alpha_edge']) # type: ignore
+        best_alpha_neuron = float(best_row['params_alpha_neuron']) # type: ignore
 
         print(f"Best Validation RMSE:   {best_row['value']:.6f}")
         print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
@@ -148,7 +148,7 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
                 best_layer_width, best_num_inducing,
                 alpha_edge=best_alpha_edge, alpha_neuron=best_alpha_neuron, seed=seed
             ),
-            "test_rmse": float(best_row['test_rmse']),
+            "test_rmse": float(best_row['test_rmse']), # type: ignore
         }
 
     # Run optimization if results don't exist

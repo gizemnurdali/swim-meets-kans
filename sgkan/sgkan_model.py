@@ -147,7 +147,6 @@ def fit_layer(
     H = np.zeros((N, layer_width))
     neurons = []
     method_counts = Counter()
-    eps = 1e-8
 
     for q in range(layer_width):
         edge_outputs, edge_params = [], []
@@ -171,19 +170,8 @@ def fit_layer(
                 sigma_scale=sigma_scale, seed=seed + q, kernel_type=kernel_type,
                 period=period)
             
-            if pair_selection_strategy == "swim":
-                # # Dimension-specific SWIM score for Ridge Regressor penalization
-                # dx = abs(x_b[q, p] - x_a[q, p])
-                # dy = abs(y_b[q] - y_a[q])
-                # dim_score = dy / (dx + eps)
-                # # If dim_score is small then penalize more
-                # alpha_edge_p = max(alpha_edge / (1 + dim_score), 1e-8)
-                alpha_edge_p = alpha_edge
-            else: 
-                alpha_edge_p = alpha_edge
-
             # Algorithm 4: Edge-level Ridge Regression
-            edge_model = Ridge(alpha=alpha_edge_p, fit_intercept=False)
+            edge_model = Ridge(alpha=alpha_edge, fit_intercept=False)
             edge_model.fit(k_local, local_y)
             w_p = edge_model.coef_
 
