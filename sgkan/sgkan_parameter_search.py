@@ -19,7 +19,8 @@ pd.set_option("display.precision", 10)
 LAYER_WIDTH_OPTIONS = [100, 250, 500, 750, 1000]
 NUM_INDUCING_OPTIONS = [10, 25, 50, 75, 100]
 ALPHA_EDGE_OPTIONS = [0, 1e-3, 1e-1, 1, 10]
-ALPHA_NEURON_OPTIONS = [0, 1e-3, 1e-1, 1, 10]
+ALPHA_NEURON_OPTIONS = [0]
+KERNEL_TYPE_OPTIONS = ["rbf", "matern", "periodic"]
 MAX_LOCAL_POINTS = 1000
 
 
@@ -48,7 +49,7 @@ def _make_two_layer_sgkan_configs(layer_width, num_inducing, alpha_edge=1e-1,
 def objective_sgkan(trial, X_train, y_train, val_size=0.2, seed=0, sigma_scale=1, kernel_type="rbf"):
     """
     Optuna objective: pick the best hyperparameter combination
-    (layer_width, num_inducing, alpha_edge, alpha_neuron) for a 2-layer SGKAN,
+    (layer_width, num_inducing, alpha_edge, alpha_neuron, kernel_type) for a 2-layer SGKAN,
     via a single train/validation split (same pattern used for the KAN search in utils.py).
     Returns validation RMSE. Test-set evaluation happens once, after the search,
     for the winning config only (see study_optuna_sgkan).
@@ -57,6 +58,7 @@ def objective_sgkan(trial, X_train, y_train, val_size=0.2, seed=0, sigma_scale=1
     num_inducing = trial.suggest_categorical("num_inducing", NUM_INDUCING_OPTIONS)
     alpha_edge = trial.suggest_categorical("alpha_edge", ALPHA_EDGE_OPTIONS)
     alpha_neuron = trial.suggest_categorical("alpha_neuron", ALPHA_NEURON_OPTIONS)
+    kernel_type = trial.suggest_categorical("kernel_type", KERNEL_TYPE_OPTIONS)
 
     layer_configs = _make_two_layer_sgkan_configs(
         layer_width, num_inducing, alpha_edge=alpha_edge, alpha_neuron=alpha_neuron,
@@ -107,8 +109,9 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
                         sampler="grid", kernel_type="rbf"):
     """
     Run an Optuna search (TPE-based or exhaustive grid, via `sampler`) over
-    (layer_width, num_inducing, alpha_edge, alpha_neuron) for a 2-layer SGKAN
-    model on a dataset. Layer 2's width is fixed at 1.
+    (layer_width, num_inducing, alpha_edge, alpha_neuron, kernel_type) for a 2-layer SGKAN
+    model on a dataset. Layer 2's width is fixed at 1. kernel_type parameter is ignored
+    as it is suggested per trial; kernel_type_rbf is used as fallback for API consistency.
     """
     csv_path = f"data/{dataset_name.lower()}_sgkan_optuna_search.csv"
 
@@ -126,17 +129,19 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
         best_num_inducing = int(best_row['params_num_inducing']) # type: ignore
         best_alpha_edge = float(best_row['params_alpha_edge']) # type: ignore
         best_alpha_neuron = float(best_row['params_alpha_neuron']) # type: ignore
+        best_kernel_type = best_row['params_kernel_type'] # type: ignore
 
-        print(f"Best Validation RMSE:   {best_row['value']:.6f}")
-        print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
+        print(f"Best Validation RMSE:   {best_row['value']:.15f}")
+        print(f"Best Test RMSE:          {best_row['test_rmse']:.15f}")
         print(f"Best layer_width:        {best_layer_width}")
         print(f"Best num_inducing:       {best_num_inducing}")
         print(f"Best alpha_edge:         {best_alpha_edge:.3e}")
         print(f"Best alpha_neuron:       {best_alpha_neuron:.3e}")
+        print(f"Best kernel_type:        {best_kernel_type}")
 
         print(f"\nAll {len(trials_df)} trials:")
         print(trials_df[['number', 'value', 'params_layer_width', 'params_num_inducing',
-                          'params_alpha_edge', 'params_alpha_neuron',
+                          'params_alpha_edge', 'params_alpha_neuron', 'params_kernel_type',
                           'val_rmse', 'test_rmse']].to_string())
 
         return {
@@ -144,16 +149,18 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
             "num_inducing": best_num_inducing,
             "alpha_edge": best_alpha_edge,
             "alpha_neuron": best_alpha_neuron,
+            "kernel_type": best_kernel_type,
             "layer_configs": _make_two_layer_sgkan_configs(
                 best_layer_width, best_num_inducing,
-                alpha_edge=best_alpha_edge, alpha_neuron=best_alpha_neuron, seed=seed
+                alpha_edge=best_alpha_edge, alpha_neuron=best_alpha_neuron, seed=seed,
+                kernel_type=best_kernel_type # type: ignore
             ),
             "test_rmse": float(best_row['test_rmse']), # type: ignore
         }
 
     # Run optimization if results don't exist
     print("=" * 70)
-    print(f"Optimizing SGKAN (layer_width, num_inducing, alpha_edge, alpha_neuron) "
+    print(f"Optimizing SGKAN (layer_width, num_inducing, alpha_edge, alpha_neuron, kernel_type) "
           f"via {sampler.upper()} on {dataset_name}")
     print("=" * 70)
 
@@ -165,6 +172,7 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
             "num_inducing": NUM_INDUCING_OPTIONS,
             "alpha_edge": ALPHA_EDGE_OPTIONS,
             "alpha_neuron": ALPHA_NEURON_OPTIONS,
+            "kernel_type": KERNEL_TYPE_OPTIONS,
         }
         sampler=optuna.samplers.GridSampler(search_space)
 
@@ -184,15 +192,17 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
     print("\n" + "=" * 70)
     print("Best trial results:")
     print("=" * 70)
-    print(f"Best Validation RMSE:   {study.best_value:.6f}")
+    print(f"Best Validation RMSE:   {study.best_value:.15f}")
     best_layer_width = study.best_params['layer_width']
     best_num_inducing = study.best_params['num_inducing']
     best_alpha_edge = study.best_params['alpha_edge']
     best_alpha_neuron = study.best_params['alpha_neuron']
+    best_kernel_type = study.best_params['kernel_type']
     print(f"Best layer_width:        {best_layer_width}")
     print(f"Best num_inducing:       {best_num_inducing}")
     print(f"Best alpha_edge:         {best_alpha_edge:.3e}")
     print(f"Best alpha_neuron:       {best_alpha_neuron:.3e}")
+    print(f"Best kernel_type:        {best_kernel_type}")
 
     # Retrain ONCE on the full training set with the winning combination,
     # and evaluate on the held-out test set — only place a full-data
@@ -200,19 +210,19 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
     final_layer_configs = _make_two_layer_sgkan_configs(
         best_layer_width, best_num_inducing,
         alpha_edge=best_alpha_edge, alpha_neuron=best_alpha_neuron,
-        seed=seed, sigma_scale=sigma_scale, kernel_type=kernel_type
+        seed=seed, sigma_scale=sigma_scale, kernel_type=best_kernel_type
     )
     final_model = SGKANModel(final_layer_configs).fit(X_train, y_train)
     y_test_pred = final_model.predict(X_test)
     best_test_rmse = float(np.sqrt(np.mean((y_test_pred - y_test) ** 2)))
-    print(f"Best Test RMSE:          {best_test_rmse:.6f}")
+    print(f"Best Test RMSE:          {best_test_rmse:.15f}")
 
     trials_df = study.trials_dataframe()
     print(f"\nAll {len(trials_df)} trials:")
     print(trials_df[['number', 'value', 'params_layer_width', 'params_num_inducing',
-                      'params_alpha_edge', 'params_alpha_neuron',
+                      'params_alpha_edge', 'params_alpha_neuron', 'params_kernel_type',
                       'user_attrs_val_rmse', 'user_attrs_sigma_scale',
-                      'user_attrs_kernel_type', 'user_attrs_fit_duration_sec']].to_string())
+                      'user_attrs_fit_duration_sec']].to_string())
 
     trials_df = trials_df.rename(columns={
         "user_attrs_val_rmse": "val_rmse",
@@ -234,7 +244,7 @@ def study_optuna_sgkan(dataset_name, X_train, y_train, X_test, y_test,
         "num_inducing": best_num_inducing,
         "alpha_edge": best_alpha_edge,
         "alpha_neuron": best_alpha_neuron,
-        "kernel_type": kernel_type,
+        "kernel_type": best_kernel_type,
         "sigma_scale": sigma_scale,
         "layer_configs": final_layer_configs,
         "test_rmse": best_test_rmse,
