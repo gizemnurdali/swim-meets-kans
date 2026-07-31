@@ -21,6 +21,7 @@ The project explores combining SWIM's data-driven methodology with KAN's network
 **hkan/**: Original Hierarchical Kolmogorov-Arnold Networks (HKAN) source code
 - `hkan.py`: original HKAN model implementation
 - `hkan_sanity_check.ipynb`: sanity check and preliminary analysis of the official HKAN implementation (depth vs. expressivity, center selection behavior)
+- `tutorial.ipynb`: HKAN walkthrough and usage guide
 
 **swimnetworks-paper/**:
 - `swim_sanity_check.ipynb`: sanity check of the official SWIM implementation
@@ -28,6 +29,7 @@ The project explores combining SWIM's data-driven methodology with KAN's network
 **sgkan/**: new proposed algorithm
 - `sgkan_model.py`: reusable SG-KAN implementation (SWIM pair sampling, local point collection, edge kernel construction, edge/neuron-level ridge regression)
 - `sgkan_notebook.ipynb`: original notebook where the algorithm was built and prototyped from scratch, step by step; `sgkan_model.py` is the script version for reuse in the benchmark notebooks
+- `sgkan_parameter_search.py`: Optuna hyperparameter search and tuning for SG-KAN
 
 **Root-level scripts**:
 - `datasets.py`: loads the synthetic TF and real-world datasets from `data/`
@@ -39,7 +41,7 @@ The project explores combining SWIM's data-driven methodology with KAN's network
 **Root-level notebooks**:
 - `hkan_model_paper_reproduction_tf1_tf5.ipynb`: reproduces HKAN's results on TF1–TF5 using the paper's reported hyperparameter configurations, compared against their published numbers
 - `kan_hkan_benchmark_tf1_tf5.ipynb`: benchmarks KAN (Optuna-searched architecture with grid extension) against HKAN across TF1–TF5
-- `sgkan_experiments_tf1_tf5.ipynb`: TODO: update here later, will be similar to the optuna work
+- `benchmarking_and_evaluation.ipynb`: comprehensive benchmarking and evaluation of SG-KAN, KAN, and HKAN across all datasets with performance metrics
 
 ## Contributions
 
