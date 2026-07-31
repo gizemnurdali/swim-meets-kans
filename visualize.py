@@ -32,11 +32,11 @@ def plot_model_stages(
 
         plot_items.append(
             (rf"$\phi^{{({layer_idx})}}_{{q_{{{qq}}},p_{{{pp}}}}}$", phi[qq, pp, :],
-             f"Layer {layer_idx} BlF (q={qq}, p={pp})", cmap)
+             f"Layer {layer_idx} Univariate Edge function (q={qq}, p={pp})", cmap)
         )
         plot_items.append(
             (rf"$h^{{({layer_idx})}}_{{q_{{{qq}}}}}$", h[:, qq],
-             f"Layer {layer_idx} h-function (q={qq})", cmap)
+             f"Layer {layer_idx} Neuron (q={qq})", cmap)
         )
 
     plot_items.append((r"$y$ (target)", y_train, "Ground truth", cmap))

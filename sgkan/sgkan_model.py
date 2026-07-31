@@ -147,7 +147,6 @@ def fit_layer(
     H = np.zeros((N, layer_width))
     neurons = []
     method_counts = Counter()
-    eps = 1e-8
 
     for q in range(layer_width):
         edge_outputs, edge_params = [], []
@@ -171,34 +170,34 @@ def fit_layer(
                 sigma_scale=sigma_scale, seed=seed + q, kernel_type=kernel_type,
                 period=period)
             
-            if pair_selection_strategy == "swim":
-                # Dimension-specific SWIM score for Ridge Regressor penalization
-                dx = abs(x_b[q, p] - x_a[q, p])
-                dy = abs(y_b[q] - y_a[q])
-                dim_score = dy / (dx + eps)
-                # If dim_score is small then penalize more
-                alpha_edge_p = max(alpha_edge / (1 + dim_score), 1e-8)
-            else: 
-                alpha_edge_p = alpha_edge
-
             # Algorithm 4: Edge-level Ridge Regression
-            edge_model = Ridge(alpha=alpha_edge_p, fit_intercept=False)
+            edge_model = Ridge(alpha=alpha_edge, fit_intercept=True, solver="svd")
             edge_model.fit(k_local, local_y)
             w_p = edge_model.coef_
-
+            b_p = edge_model.intercept_
+            local_pred = edge_model.predict(k_local)
             # Evaluate this edge on the full training set, using the SAME l_p as fit
             # Kernel similarity between points and the fixed inducing points
             k_train = apply_kernel(X[:, p], z_p, l_p, kernel_type=kernel_type, period=period)
             # Weighted sum -> this edge's output for each query point
             # Store fixed paramaters to use it later
-            edge_outputs.append(k_train @ w_p)
-            edge_params.append({"z_p": z_p, "l_p": l_p, "w_p": w_p})
+            edge_outputs.append(edge_model.predict(k_train))
+            edge_params.append({
+                "z_p": z_p,
+                "l_p": l_p,
+                "w_p": w_p,
+                "b_p": b_p,
+                "local_y": local_y,
+                "local_pred": local_pred, 
+                "lo": lo,
+                "hi": hi,
+            })
 
         # Algorithm 5: Neuron Construction
         # (N, D_in) -- one column per edge output, each column denotes one edge result
         edge_outputs = np.column_stack(edge_outputs)
 
-        neuron_model = Ridge(alpha=alpha_neuron, fit_intercept=True)
+        neuron_model = Ridge(alpha=alpha_neuron, fit_intercept=True, solver="svd")
         neuron_model.fit(edge_outputs, y)
         H[:, q] = neuron_model.predict(edge_outputs)
 
@@ -230,7 +229,7 @@ def transform_layer(X_new, neurons):
             k = apply_kernel(X_new[:, p], ep["z_p"], ep["l_p"],
                               kernel_type=neuron["kernel_type"], period=neuron["period"])
             # Weighted sum -> this edge's output for each query point
-            edge_outputs.append(k @ ep["w_p"])
+            edge_outputs.append(k @ ep["w_p"] + ep["b_p"])
         edge_outputs = np.column_stack(edge_outputs)
 
         # Apply the stored neuron-level (stage 2) weights and bias
@@ -243,7 +242,10 @@ def sgkan_layer_step(
         X, y, layer_width, pair_selection_strategy="swim", num_inducing=15, lengthscale_method="range",
         sigma_scale=1.0, alpha_edge=1e-3, alpha_neuron=1e-3, seed=0,
         kernel_type="rbf", period=1.0, max_local_points=1000):
-
+    """Visualization-only wrapper around fit_layer. Same fit, but also
+    recomputes every edge's output on the full X (not just its local
+    training subset) so plots can inspect individual edges. Not used
+    for training/inference."""
     # Fit layer
     H, neurons = fit_layer(
         X, y, layer_width, pair_selection_strategy=pair_selection_strategy,
@@ -259,12 +261,14 @@ def sgkan_layer_step(
         for p, edge_p in enumerate(neuron["edge_params"]):
             k = apply_kernel(X[:, p], edge_p["z_p"], edge_p["l_p"],
                               kernel_type=neuron["kernel_type"], period=neuron["period"])
-            phi[q, p, :] = k @ edge_p["w_p"]
+            phi[q, p, :] = k @ edge_p["w_p"] + edge_p["b_p"]
 
     return phi, H, neurons
 
 def build_sgkan_stack(X_train, y_train, layer_configs):
-    """For stacking layers for sgkan"""
+    """Visualization-only: fits a full SGKAN stack via sgkan_layer_step,
+    keeping each layer's per-edge outputs (phi) for plotting. Not used
+    for training/inference — use SGKANModel for that."""
     X_current = X_train
     stages = []
     layer_neurons = []

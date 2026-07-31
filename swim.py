@@ -101,8 +101,7 @@ def select_pairs(x_a, x_b, y_a, y_b, probs, layer_width, random_seed=42):
     Select layer_width winning pairs from candidates using SWIM probabilities.
 
     Samples pairs without replacement according to their SWIM scores (higher-scored
-    pairs are more likely to be selected). Allows the same pair to be selected
-    multiple times.
+    pairs are more likely to be selected).
 
     Args:
         x_a: Start points of candidate pairs, shape (M, D).
