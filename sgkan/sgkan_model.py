@@ -74,7 +74,26 @@ def apply_kernel(x1, x2, l_p, kernel_type="rbf", period=1.0):
         return periodic_kernel(x1, x2, l_p, period=period)
     else:
         raise ValueError(f"Unknown kernel_type: {kernel_type}")
-    
+
+def select_inducing_farthest(local_x_p, n_ind, seed=0):
+    """Greedy farthest-point sampling for inducing points, instead of a
+    uniform-random subset. Spreads inducing points across the local
+    interval so kernel columns don't end up near-duplicate (which causes
+    multicollinearity in the edge-level ridge fit)."""
+    rng = np.random.default_rng(seed)
+    n = local_x_p.shape[0]
+    if n_ind >= n:
+        return np.sort(local_x_p)
+
+    selected = [int(rng.integers(0, n))]
+    dists = np.abs(local_x_p - local_x_p[selected[0]])
+    for _ in range(1, n_ind):
+        next_idx = int(np.argmax(dists))
+        selected.append(next_idx)
+        dists = np.minimum(dists, np.abs(local_x_p - local_x_p[next_idx]))
+
+    return np.sort(local_x_p[selected])
+
 # SGKAN MODEL SETUP
 # Model wrapper
 class SGKANModel:
@@ -108,10 +127,9 @@ def build_edge_features(local_x_p, lo, hi, num_inducing=15, sigma_scale=1.0, see
     n = local_x_p.shape[0]
     n_ind = min(num_inducing, n)
 
-    # Randomly select a fixed number of inducing (representative) points from the local data
-    rng = np.random.default_rng(seed)
-    idx = rng.choice(n, size=n_ind, replace=False)
-    z_p = np.sort(local_x_p[idx])
+    # Select inducing points via farthest-point sampling, instead of a
+    # uniform-random subset, to keep them spread across the local data
+    z_p = select_inducing_farthest(local_x_p, n_ind, seed=seed)
 
     # Lengthscale derived directly from the SWIM-selected interval width,
     l_p = sigma_scale * (hi - lo)
@@ -156,9 +174,11 @@ def fit_layer(
             hi = max(x_a[q, p], x_b[q, p])
             
             # Algorithm 2: Local Point Collection
+            # min_points and k_fallback are tied to num_inducing, so an
+            # edge is never fit with fewer local points than it has features
             local_x_p, local_y, method = collect_local_gen(
-                X, y, p, lo, hi, max_points=max_local_points,
-                cap_seed=seed + q * D_in + p
+                X, y, p, lo, hi, min_points=num_inducing, max_points=max_local_points,
+                k_fallback=num_inducing, cap_seed=seed + q * D_in + p
             )
             method_counts[method] += 1
 
@@ -283,4 +303,3 @@ def build_sgkan_stack(X_train, y_train, layer_configs):
     # last stage phi values are equivalent to the predicted y
     yhat = stages[-1][2].ravel()
     return stages, yhat, layer_neurons
- 

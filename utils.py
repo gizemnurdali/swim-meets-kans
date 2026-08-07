@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import torch
-import gpytorch
 import optuna
 import numpy as np
 import pandas as pd
@@ -147,7 +146,7 @@ def build_kan(width, grid=3, k=3, seed=42):
     return KAN(width=width, grid=grid, k=k, seed=seed, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
 
-def fit_kan(model, X_train, y_train, X_test, y_test, steps=50, opt="Adam", lamb=0.01):
+def fit_kan(model, X_train, y_train, X_test, y_test, steps=20, opt="LBFGS", lamb=0):
     """
     Train a KAN model using train and test data.
 
@@ -165,9 +164,9 @@ def fit_kan(model, X_train, y_train, X_test, y_test, steps=50, opt="Adam", lamb=
     start_time = time.time()
 
     X_train_tensor = torch.tensor(X_train, dtype=torch.float64, device=model.device)
-    y_train_tensor = torch.tensor(y_train, dtype=torch.float64, device=model.device)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float64, device=model.device).reshape(-1, 1)
     X_test_tensor = torch.tensor(X_test, dtype=torch.float64, device=model.device)
-    y_test_tensor = torch.tensor(y_test, dtype=torch.float64, device=model.device)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float64, device=model.device).reshape(-1, 1)
 
     dataset = {
         'train_input': X_train_tensor,
@@ -183,8 +182,8 @@ def fit_kan(model, X_train, y_train, X_test, y_test, steps=50, opt="Adam", lamb=
     return model
 
 def fit_kan_with_grid_extension(model, X_train, y_train, X_test, y_test,
-                                 grids=(5, 10, 25, 50, 100), steps_per_grid=5,
-                                 opt="LBFGS", lamb=1e-3):
+                                 grids=(5, 10, 20), steps_per_grid=20,
+                                 opt="LBFGS", lamb=0):
     """
     Train a KAN model with coarse-to-fine grid extension.
 
@@ -206,9 +205,9 @@ def fit_kan_with_grid_extension(model, X_train, y_train, X_test, y_test,
     start_time = time.time()
 
     X_train_tensor = torch.tensor(X_train, dtype=torch.float64, device=model.device)
-    y_train_tensor = torch.tensor(y_train, dtype=torch.float64, device=model.device)
+    y_train_tensor = torch.tensor(y_train, dtype=torch.float64, device=model.device).reshape(-1, 1)
     X_test_tensor = torch.tensor(X_test, dtype=torch.float64, device=model.device)
-    y_test_tensor = torch.tensor(y_test, dtype=torch.float64, device=model.device)
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float64, device=model.device).reshape(-1, 1)
 
     dataset = {
         'train_input': X_train_tensor,
@@ -262,188 +261,125 @@ def objective_kan(trial, X_train, y_train, X_test, y_test, val_size=0.2):
     Optuna objective: pick the best KAN width (from the HKAN paper's search
     space W) via a single train/validation split. Each candidate is trained
     once, with coarse-to-fine grid extension (LBFGS at each stage). Returns
-    validation RMSE. Test-set evaluation is NOT done here (it would double
-    the training cost per trial) — it's done once, after the search, for
-    the winning architecture only (see study_optuna_kan).
+    validation RMSE, the sole criterion used for architecture selection.
+    The test set is not touched during the search.
     """
     n = X_train.shape[1]
 
-    # Architecture search space W from the HKAN paper
     width_options = [
-        [n, 1],
-        [n, 2, 1],
-        [n, n + 1, 1],
-        [n, 2 * n + 1, 1],
-        [n, 2, 2, 1],
-        [n, n + 1, 2, 1],
-        [n, 2 * n + 1, 2, 1],
-        [n, n + 1, n + 1, 1],
-        [n, 2 * n + 1, n + 1, 1],
-        [n, 2 * n + 1, 2 * n + 1, 1],
+        [n, 1], [n, 2, 1],
+        [n, n + 1, 1], [n, 2 * n + 1, 1], [n, 2, 2, 1],
+        [n, n + 1, 2, 1], [n, 2 * n + 1, 2, 1], [n, n + 1, n + 1, 1],
+        [n, 2 * n + 1, n + 1, 1], [n, 2 * n + 1, 2 * n + 1, 1],
     ]
-
-    # Suggest architecture
     width_idx = trial.suggest_categorical("width_idx", list(range(len(width_options))))
     width = width_options[width_idx]
+    architecture_str = str(width) 
 
-    # Single train/validation split (instead of K-Fold CV) on training data
     n_samples = X_train.shape[0]
     rng = np.random.RandomState(42)
     perm = rng.permutation(n_samples)
     n_val = int(round(n_samples * val_size))
     val_idx, sub_train_idx = perm[:n_val], perm[n_val:]
-
     X_sub_train, X_val = X_train[sub_train_idx], X_train[val_idx]
     y_sub_train, y_val = y_train[sub_train_idx], y_train[val_idx]
 
-    # Build and train model with suggested architecture (the ONLY training this trial does)
+    grids = (5, 10, 20)
+    steps_per_grid = 20
+    opt = "LBFGS"
+    lamb = 0
+
     model = build_kan(width=width, grid=3, k=3, seed=42)
-    model = fit_kan_with_grid_extension(model, X_sub_train, y_sub_train,
-            X_val, y_val,
-            opt="LBFGS", lamb=1e-3)
-
-    # Evaluate on the held-out validation split
-    results = em.evaluate(
-        KANModel(model),
-        X_sub_train, y_sub_train,
-        X_val, y_val
+    model = fit_kan_with_grid_extension(
+        model, X_sub_train, y_sub_train, X_val, y_val,
+        grids=grids, steps_per_grid=steps_per_grid, opt=opt, lamb=lamb,
     )
-    val_rmse = float(results['test']['rmse'])
 
-    # Store metadata as user attributes (will appear in trials dataframe)
+    val_results = em.evaluate(KANModel(model), X_sub_train, y_sub_train, X_val, y_val)
+    val_rmse = float(val_results['test']['rmse'])
+
+    trial.set_user_attr("architecture", architecture_str)
     trial.set_user_attr("val_rmse", val_rmse)
-    trial.set_user_attr("grids", str((5, 10, 25, 50, 100)))
-    trial.set_user_attr("steps_per_grid", 5)
-    trial.set_user_attr("opt", "LBFGS")
-    trial.set_user_attr("lamb", 1e-3)
-    
-    # Return validation RMSE for optimization
+    trial.set_user_attr("grids", str(grids))
+    trial.set_user_attr("steps_per_grid", steps_per_grid)
+    trial.set_user_attr("opt", opt)
+    trial.set_user_attr("lamb", lamb)
+
     return val_rmse
 
 
-def study_optuna_kan(dataset_name, X_train, y_train, X_test, y_test, n_trials=50):
+def study_optuna_kan(dataset_name, X_train, y_train, X_test, y_test):
     """
-    Run Optuna parameter search for KAN architecture on a dataset.
-
-    Uses a single train/validation split to evaluate architectures from the
-    HKAN paper's predefined width options, searched via Optuna's TPE sampler
-    (rather than exhaustive grid search or 5-fold CV, for faster iteration).
+    Run an exhaustive Optuna grid search over the KAN architecture search
+    space W defined by the HKAN paper, using GridSampler so every
+    architecture is evaluated exactly once. Each trial's grid extension
+    configuration, optimizer, validation RMSE, and duration are recorded in
+    the returned trials dataframe. The test set is not used during the search.
 
     Args:
         dataset_name (str): Dataset name for output file and logging
         X_train, y_train: Training data
         X_test, y_test: Test data
-        n_trials (int): Number of trials to run (default: 50; TPE is stochastic
-            and benefits from more trials than the 10 needed for grid exhaustion)
 
     Returns:
         dict: Best parameters with keys 'width_idx' and 'architecture'
     """
     csv_path = f"data/{dataset_name.lower()}_kan_optuna_search.csv"
     n = X_train.shape[1]
-
-    # Architecture search space W from the HKAN paper (parameterized by n input features)
     width_options = [
-        [n, 1], [n, 2, 1], [n, n+1, 1], [n, 2*n+1, 1], [n, 2, 2, 1],
-        [n, n+1, 2, 1], [n, 2*n+1, 2, 1], [n, n+1, n+1, 1],
-        [n, 2*n+1, n+1, 1], [n, 2*n+1, 2*n+1, 1],
+        [n, 1], [n, 2, 1], 
+        [n, n + 1, 1], [n, 2 * n + 1, 1], [n, 2, 2, 1],
+        [n, n + 1, 2, 1], [n, 2 * n + 1, 2, 1], [n, n + 1, n + 1, 1],
+        [n, 2 * n + 1, n + 1, 1], [n, 2 * n + 1, 2 * n + 1, 1],
     ]
 
-    # Load cached results if they exist
+    print_cols = ['number', 'params_width_idx', 'user_attrs_architecture',
+                  'user_attrs_val_rmse', 'user_attrs_grids',
+                  'user_attrs_steps_per_grid', 'user_attrs_opt',
+                  'user_attrs_lamb', 'duration']
+
     if os.path.exists(csv_path):
         print("=" * 70)
         print(f"Results found for {dataset_name}. Loading from {csv_path}")
         print("=" * 70)
-
         trials_df = pd.read_csv(csv_path)
-        best_idx = trials_df['value'].idxmin()
+        best_idx = trials_df['user_attrs_val_rmse'].idxmin()
         best_row = trials_df.loc[best_idx]
-
         width_idx = int(best_row['params_width_idx']) # type: ignore
         best_arch = width_options[width_idx]
 
-        print(f"Best Validation RMSE:   {best_row['value']:.6f}")
-        print(f"Best Test RMSE:          {best_row['test_rmse']:.6f}")
-        print(f"Best width_idx:          {width_idx}")
-        print(f"Best architecture:       {best_arch}")
-
+        print(f"Best Validation RMSE:   {best_row['user_attrs_val_rmse']:.6f}")
+        print(f"Best architecture:       {best_row['user_attrs_architecture']}")
         print(f"\nAll {len(trials_df)} trials:")
-        print(trials_df[['number', 'value', 'params_width_idx', 'val_rmse', 'test_rmse']].to_string())
+        print(trials_df[print_cols].to_string())
 
-        return {
-            "width_idx": width_idx,
-            "architecture": best_arch,
-            "grids": (5, 10, 25, 50, 100),
-            "steps_per_grid": 5,
-            "opt": "LBFGS",
-            "lamb": 1e-3,
-        }
+        return {"width_idx": width_idx, "architecture": best_arch}
 
-    # Run optimization if results don't exist
     print("=" * 70)
-    print(f"Optimizing KAN architecture (TPE, single train/val split) on {dataset_name}")
+    print(f"Optimizing KAN architecture (exhaustive grid search) on {dataset_name}")
     print("=" * 70)
 
+    search_space = {"width_idx": list(range(len(width_options)))}
     study = optuna.create_study(
         direction='minimize',
-        sampler=optuna.samplers.TPESampler(seed=42),
+        sampler=optuna.samplers.GridSampler(search_space, seed=42),
     )
-
     study.optimize(
-        lambda trial: objective_kan(
-            trial, X_train, y_train, X_test, y_test, val_size=0.2
-        ),
-        n_trials=n_trials,
+        lambda trial: objective_kan(trial, X_train, y_train, X_test, y_test, val_size=0.2),
+        n_trials=len(width_options),
         show_progress_bar=True,
     )
 
-    # Print and save optimization results
-    print("\n" + "=" * 70)
-    print("Best trial results:")
-    print("=" * 70)
-    print(f"Best Validation RMSE:   {study.best_value:.6f}")
-    print(f"Best width_idx:          {study.best_params['width_idx']}")
-    best_arch = width_options[study.best_params['width_idx']]
-    print(f"Best architecture:       {best_arch}")
-
-    # Retrain ONCE on the full training set with the winning architecture,
-    # and evaluate on the held-out test set. This is the only place a
-    # full-data training happens — it does not happen per trial.
-    final_model = build_kan(width=best_arch, grid=3, k=3, seed=42)
-    final_model = fit_kan_with_grid_extension(final_model, X_train, y_train, X_test, y_test, opt="LBFGS", lamb=1e-3)
-    test_results = em.evaluate(KANModel(final_model), X_train, y_train, X_test, y_test)
-    best_test_rmse = float(test_results['test']['rmse'])
-    print(f"Best Test RMSE:          {best_test_rmse:.6f}")
+    best_idx = study.best_params['width_idx']
+    best_arch = width_options[best_idx]
+    print(f"\nBest Validation RMSE: {study.best_value:.6f}")
+    print(f"Best architecture:     {best_arch}")
 
     trials_df = study.trials_dataframe()
-    print(f"\nAll {len(trials_df)} trials:")
-    print(trials_df[['number', 'value', 'params_width_idx', 'user_attrs_val_rmse',
-                      'user_attrs_grids', 'user_attrs_steps_per_grid',
-                      'user_attrs_opt', 'user_attrs_lamb']].to_string())
-
-    # Rename columns and save to CSV for future reference
-    trials_df = trials_df.rename(columns={
-        "user_attrs_val_rmse": "val_rmse",
-        "user_attrs_grids": "grids",
-        "user_attrs_steps_per_grid": "steps_per_grid",
-        "user_attrs_opt": "opt",
-        "user_attrs_lamb": "lamb",
-    })
     trials_df['duration'] = trials_df['duration'].dt.total_seconds()
-
-    # test_rmse is only known for the winning trial (computed once above),
-    # so it's left blank for every other row.
-    trials_df['test_rmse'] = np.nan
-    trials_df.loc[trials_df['number'] == study.best_trial.number, 'test_rmse'] = best_test_rmse
-
     trials_df.to_csv(csv_path, index=False)
 
-    best_idx = study.best_params['width_idx']
-    return {
-        "width_idx": best_idx,
-        "architecture": width_options[best_idx],
-        "grids": (5, 10, 25, 50, 100),
-        "steps_per_grid": 5,
-        "opt": "LBFGS",
-        "lamb": 1e-3,
-    }
+    print(f"\nAll {len(trials_df)} trials:")
+    print(trials_df[print_cols].to_string())
+
+    return {"width_idx": best_idx, "architecture": best_arch}

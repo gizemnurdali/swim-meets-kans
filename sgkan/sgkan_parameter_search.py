@@ -24,6 +24,15 @@ KERNEL_TYPE_OPTIONS = ["rbf", "matern", "periodic"]
 MAX_LOCAL_POINTS = 1000
 
 
+# # TF4 parameter set candidates
+# LAYER_WIDTH_OPTIONS = [750, 1000]
+# NUM_INDUCING_OPTIONS = [50, 75, 100]  
+# ALPHA_EDGE_OPTIONS = [1] 
+# ALPHA_NEURON_OPTIONS = [0]
+# KERNEL_TYPE_OPTIONS = ["rbf"] 
+# MAX_LOCAL_POINTS = 1000
+
+
 def _make_two_layer_sgkan_configs(layer_width, num_inducing, alpha_edge=1e-1,
                                    alpha_neuron=1e-1, seed=0, sigma_scale=1, kernel_type="rbf"):
     """Build the 2-layer config list, layer 2 fixed at width=1, given
