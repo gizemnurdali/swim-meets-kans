@@ -33,7 +33,6 @@ def collect_local_gen(X, y, p, lo, hi, min_points=5, max_points=1000, k_fallback
     # If there are enough points inside the interval
     if n_inside >= min_points:
         x_inside, y_inside = x_p[mask], y[mask]
-        # If there are too many points inside, keep only the ones closest to the midpoint
         if n_inside <= max_points:
             return x_inside, y_inside, "interval"
         # Take random max_points from the interval
