@@ -3,13 +3,13 @@ Utility functions for model training and prediction.
 """
 import os
 import sys
+import ast
 import time
 import torch
 import optuna
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge
+from scipy.stats import iqr
 
 # Add pykan and sgkan to path using relative imports
 base_path = os.path.dirname(os.path.abspath(__file__))
@@ -20,15 +20,101 @@ import evaluation_metrics as em
 from kan import KAN  # type: ignore
 from hkan.hkan import (
     make_hkan_layer, extend_hkan, set_tqdm_disable,
+    ConnectingLayer, ExpandingLayer, Sigmoid
 )
+from sgkan import sgkan_model
 
 torch.set_default_dtype(torch.float64)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+# ─── Experimental Utilities ─────────────────────────────────────────────
+# Running 50 seed, summarizing metrics, etc.
+
+
+def create_export_seed_results(seed_results, name):
+    """Create dataframe from the seed results."""
+    rows = []
+    for i, r in enumerate(seed_results):
+        rows.append({
+            "seed": i,
+            "train_mae": r["train"]["mae"],
+            "train_rmse": r["train"]["rmse"],
+            "train_inference_time_secs": r["train"]["inference_time_secs"],
+            "test_mae": r["test"]["mae"],
+            "test_rmse": r["test"]["rmse"],
+            "test_inference_time_secs": r["test"]["inference_time_secs"],
+            "fit_time_secs": r["fit_time_secs"],
+        })
+
+    seed_results_df = pd.DataFrame(rows)
+    seed_results_df.to_csv(f"data/{name}.csv", index=False)
+    return seed_results_df
+
+
+def summarize_metrics(df, name):
+    """Calculate IQR and Median values of RMSE, MAE, inference time, and fit time metrics."""
+    summary = {
+        "model": name,
+        "train_rmse_median": df["train_rmse"].median(),
+        "train_rmse_iqr": iqr(df["train_rmse"]),
+        "test_rmse_median": df["test_rmse"].median(),
+        "test_rmse_iqr": iqr(df["test_rmse"]),
+        "train_inference_time_median": df["train_inference_time_secs"].median(),
+        "train_inference_time_iqr": iqr(df["train_inference_time_secs"]),
+        "test_inference_time_median": df["test_inference_time_secs"].median(),
+        "test_inference_time_iqr": iqr(df["test_inference_time_secs"]),
+        "fit_time_median": df["fit_time_secs"].median(),
+        "fit_time_iqr": iqr(df["fit_time_secs"]),
+    }
+    return summary
+
+
+# ─── SG-KAN Utilities ─────────────────────────────────────────────
+# Functions for building, training, and predicting with SG-KAN models
+
+
+def run_sgkan_seed_experiments(x_train, y_train, x_test, y_test, layer_configs, n_runs=50):
+    """Train SG-KAN model n_runs times with different random seeds."""
+    n_runs_results = []
+    for s in range(n_runs):
+        print(f"Seed: {s}")
+        updated_configs = [config.copy() for config in layer_configs]
+        for config in updated_configs:
+            config['seed'] = s
+
+        fit_start = time.perf_counter()
+        model = sgkan_model.SGKANModel(updated_configs).fit(x_train, y_train)
+        fit_time = time.perf_counter() - fit_start
+
+        results = em.evaluate(model, x_train, y_train, x_test, y_test)
+        results['fit_time_secs'] = fit_time # type: ignore
+        n_runs_results.append(results)
+
+    return n_runs_results
+
 
 # ─── HKAN Utilities ────────────────────────────────────────────
 # Functions for building, training, and predicting with HKAN models
+
+
+def run_hkan_seed_experiments(x_train, y_train, x_test, y_test, layer_configs, n_runs=50):
+    n_runs_results = []
+    for s in range(n_runs):
+        print(f"Seed: {s}")
+        np.random.seed(s)
+
+        model = build_hkan_model_from_configs(layer_configs, tqdm_disable=True)
+
+        fit_start = time.perf_counter()
+        fit_hkan(model, x_train, y_train)
+        fit_time = time.perf_counter() - fit_start
+
+        results = em.evaluate(model, x_train, y_train, x_test, y_test)
+        results['fit_time_secs'] = fit_time # type: ignore
+        n_runs_results.append(results)
+
+    return n_runs_results
 
 
 def build_hkan_model_from_configs(model_configs, tqdm_disable=False):
@@ -126,8 +212,90 @@ def predict_hkan(model, X_test):
         return predictions
 
 
+def fit_hkan_layer(
+        X, y, layer, n_vars_out,
+        n_basis=15, centers="random_data_points", basis_fn=Sigmoid(s=8),
+        expanding_base_regressor=None, connecting_base_regressor=None):
+    """
+    Fit one HKAN layer: ExpandingLayer (-> phi) then ConnectingLayer (-> h).
+    """
+    print(f"Layer: {layer}")
+    # Edge base regression for each dimension (Block functions)
+    # Expand each dimension by n_basis, apply centers, then apply regressor
+    # If regressor is none, then the default is Linear regression
+    expand = ExpandingLayer(
+        n_vars_out=n_vars_out, n_basis=n_basis, centers=centers, basis_fn=basis_fn,
+        base_regressor=expanding_base_regressor,
+    )
+    expand.fit(X, y)
+    phi = expand.transform(X)
+
+    # Neuron level regression for each neuron
+    # Solve num_layers times regressio
+    connect = ConnectingLayer(base_regressor=connecting_base_regressor)
+    connect.fit(phi, y)
+
+    # single-output (final) layer uses predict(); multi-output layers use transform()
+    if n_vars_out > 1:
+        h = connect.transform(phi)
+    else:
+        h = connect.predict(phi).reshape(-1, 1)
+
+    return phi, h, expand, connect
+
+
+def stack_hkan_layers(X_train, y_train, layer_configs):
+    """
+    Chain multiple fit_hkan_layer() calls to build an L-layer HKAN.
+    """
+    X_current = X_train
+    stages = []
+
+    # feed each layer's h-function output as the next layer's input
+    for i, cfg in enumerate(layer_configs, start=1):
+        phi, h, _, _ = fit_hkan_layer(X_current, y_train, **cfg)
+        stages.append((i, phi, h))
+        X_current = h   # next layer's input is this layer's output
+
+    yhat = stages[-1][2].ravel()   # final layer's h, flattened to 1D
+    return stages, yhat
+
+
 # ─── KAN Utilities ─────────────────────────────────────────────
 # Functions for building, training, and predicting with KAN models
+
+
+def load_best_kan_architecture(dataset_name):
+    """Load best KAN architecture from Optuna search results CSV."""
+    csv_path = f"data/{dataset_name.lower()}_kan_optuna_search.csv"
+    df = pd.read_csv(csv_path)
+    # Find row with minimum value (RMSE)
+    best_row = df.loc[df['value'].idxmin()]
+    # Parse architecture string to list
+    arch_str = best_row['user_attrs_architecture']
+    architecture = ast.literal_eval(arch_str) # type: ignore
+    rmse = best_row['user_attrs_val_rmse']
+    return architecture, rmse
+
+
+def run_kan_seed_experiments(x_train, y_train, x_test, y_test, width, grids=(5, 10, 20), steps_per_grid=20, opt="LBFGS", lamb=0, n_runs=50):
+    n_runs_results = []
+    for s in range(n_runs):
+        print(f"Seed: {s}")
+        model = build_kan(width=width, grid=3, k=3, seed=s)
+
+        fit_start = time.perf_counter()
+        model = fit_kan_with_grid_extension(
+            model, x_train, y_train, x_test, y_test,
+            grids=grids, steps_per_grid=steps_per_grid, opt=opt, lamb=lamb,
+        )
+        fit_time = time.perf_counter() - fit_start
+
+        results = em.evaluate(KANModel(model), x_train, y_train, x_test, y_test)
+        results['fit_time_secs'] = fit_time # type: ignore
+        n_runs_results.append(results)
+
+    return n_runs_results
 
 
 def build_kan(width, grid=3, k=3, seed=42):
@@ -180,6 +348,7 @@ def fit_kan(model, X_train, y_train, X_test, y_test, steps=20, opt="LBFGS", lamb
     elapsed_time = time.time() - start_time
     print(f"\n✓ KAN training completed in {elapsed_time:.4f} seconds")
     return model
+
 
 def fit_kan_with_grid_extension(model, X_train, y_train, X_test, y_test,
                                  grids=(5, 10, 20), steps_per_grid=20,
