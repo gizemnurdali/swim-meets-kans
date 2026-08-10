@@ -122,7 +122,7 @@ def select_pairs(x_a, x_b, y_a, y_b, probs, layer_width, random_seed=42):
     M = x_a.shape[0]
     rng = np.random.default_rng(random_seed)
 
-    # Sample layer_width pairs WITH REPLACEMENT according to probabilities
+    # Sample layer_width pairs without REPLACEMENT according to probabilities
     selected_idx = rng.choice(
         M,
         size=layer_width,

@@ -35,13 +35,12 @@ The project explores combining SWIM's data-driven methodology with KAN's network
 - `datasets.py`: loads the synthetic TF and real-world datasets from `data/`
 - `evaluation_metrics.py`: shared MAE/RMSE evaluation utilities used by all three models
 - `swim.py`: core SWIM pair-sampling implementation (candidate pair sampling, SWIM probabilities, pair selection)
-- `utils.py`: build/fit utilities for KAN and HKAN, including the Optuna hyperparameter search for KAN
+- `utils.py`: build/fit utilities for SGKAN, KAN and HKAN, including the Optuna hyperparameter search for KAN
 - `visualize.py`: plotting helpers for inspecting HKAN/SG-KAN block functions and per-layer R²
 
 **Root-level notebooks**:
-- `hkan_model_paper_reproduction_tf1_tf5.ipynb`: reproduces HKAN's results on TF1–TF5 using the paper's reported hyperparameter configurations, compared against their published numbers
-- `kan_hkan_benchmark_tf1_tf5.ipynb`: benchmarks KAN (Optuna-searched architecture with grid extension) against HKAN across TF1–TF5
-- `benchmarking_and_evaluation.ipynb`: comprehensive benchmarking and evaluation of SG-KAN, KAN, and HKAN across all datasets with performance metrics
+- `kan_parameter_optimization.ipynb`: Optuna grid search over KAN's architecture search space for each test function (TF1–TF5), selecting the winning width configuration used throughout the rest of the benchmarking
+- `sgkan_kan_hkan_benchmarking_evaluation.ipynb`: main benchmarking notebook, covering (1) HKAN reproduction against the paper's reported hyperparameters and results, (2) 50-seed run experiments for SG-KAN, HKAN, and KAN (RMSE, fit time, and inference time, with median/IQR), and (3) layer-width sensitivity analysis comparing SG-KAN (SWIM vs. random pair selection), HKAN, and KAN across TF1–TF5
 
 ## Contributions
 

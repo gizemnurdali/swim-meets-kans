@@ -7,5 +7,4 @@ pandas
 scikit-learn
 tqdm
 ipykernel
-gpytorch
 optuna
