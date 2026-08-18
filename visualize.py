@@ -1,15 +1,63 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 from sklearn.metrics import r2_score
+import os
+import re
 
 
-def plot_hypothesis_1_results(results_df, kan_best_train_rmse=None, kan_best_test_rmse=None, title=None):
+def _title_to_filename(title, ext="png"):
+    """Convert a plot title into a filesystem-safe filename, e.g.
+    'TF1 — Layer Width vs. RMSE' -> 'TF1_Layer_Width_vs_RMSE.png'."""
+    text = re.sub(r"[—–-]", " ", title)      # dashes -> space
+    text = re.sub(r"[^\w\s]", "", text)       # drop punctuation (periods, $, etc.)
+    text = re.sub(r"\s+", "_", text.strip())  # collapse whitespace -> underscore
+    return f"{text}.{ext}"
+
+
+def _annotate_hlines(ax, entries):
+    """Put KAN reference values as small text at the right edge of their
+    horizontal lines, since the shared legend (see plot_hypothesis_legend)
+    no longer carries per-TF numbers in its labels.
+    entries: list of (y, text, color) tuples. On a log-scaled axis, labels
+    whose lines are close together are pushed apart (in log-space) so the
+    text doesn't overlap, while staying anchored near their actual line."""
+    if not entries:
+        return
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    log_ylim = (np.log10(ylim[0]), np.log10(ylim[1])) if ax.get_yscale() == 'log' else ylim
+    min_gap = 0.035 * (log_ylim[1] - log_ylim[0])  # min vertical spacing, in log10 units
+
+    # sort by y so we can push overlapping neighbors apart in order
+    ordered = sorted(entries, key=lambda e: e[0])
+    placed_log_y = []
+    for y, text, color in ordered:
+        ly = np.log10(y) if ax.get_yscale() == 'log' else y
+        if placed_log_y and ly - placed_log_y[-1] < min_gap:
+            ly = placed_log_y[-1] + min_gap
+        placed_log_y.append(ly)
+
+    for (y, text, color), ly in zip(ordered, placed_log_y):
+        label_y = 10 ** ly if ax.get_yscale() == 'log' else ly
+        ax.text(xlim[1], label_y, f"  {text}", color=color, fontsize=9,
+                 va='center', ha='left', clip_on=False)
+
+
+def plot_hypothesis_1_results(results_df, kan_best_train_rmse=None, kan_best_test_rmse=None,
+                               title=None, save=True, save_dir="static", save_path=None,
+                               show_legend=True):
     """Plot Hypothesis 1 comparison results for SGKAN (swim), SGKAN (random), and HKAN.
     kan_best_train_rmse, kan_best_test_rmse: KAN's best train/test RMSE (from the
     winning architecture found via the full search), shown as horizontal reference
     lines rather than width-dependent curves, since KAN's meaningful width range
     (up to 2n+1) is incomparable in scale to SG-KAN/HKAN's swept range.
-    title: optional plot title; if omitted, a default explanatory title is used."""
+    title: optional plot title; if omitted, a default explanatory title is used.
+    save: if True (default), saves the figure at 300 DPI before showing it.
+    save_dir: folder to save into (default 'static'), created if missing.
+    save_path: explicit path/filename overriding the auto-generated one from title.
+    show_legend: if False, omits the per-panel legend (use plot_hypothesis_legend
+        to render one shared legend instead, e.g. for multi-panel TF1-TF5 figures)."""
     plt.figure(figsize=(12, 6))
 
     plt.plot(results_df['layer_width'], results_df['sgkan_swim_train_rmse'], marker='o', label='SGKAN SWIM Train', color='#1f77b4')
@@ -21,33 +69,56 @@ def plot_hypothesis_1_results(results_df, kan_best_train_rmse=None, kan_best_tes
     plt.plot(results_df['layer_width'], results_df['hkan_train_rmse'], marker='o', label='HKAN Train', color='#2ca02c')
     plt.plot(results_df['layer_width'], results_df['hkan_test_rmse'], marker='s', label='HKAN Test', color='#2ca02c', linestyle='--')
 
+    ax = plt.gca()
+
+    _hline_entries = []
     if kan_best_train_rmse is not None:
-        plt.axhline(kan_best_train_rmse, color='#d62728', linestyle='-', linewidth=2,
-                    label=f'KAN Train (best, RMSE={kan_best_train_rmse:.2e})')
+        plt.axhline(kan_best_train_rmse, color='#d62728', linestyle='-', linewidth=2, label='KAN Train (best)')
+        _hline_entries.append((kan_best_train_rmse, f"RMSE={kan_best_train_rmse:.2e}", '#d62728'))
     if kan_best_test_rmse is not None:
-        plt.axhline(kan_best_test_rmse, color='#d62728', linestyle='--', linewidth=2,
-                    label=f'KAN Test (best, RMSE={kan_best_test_rmse:.2e})')
+        plt.axhline(kan_best_test_rmse, color='#d62728', linestyle='--', linewidth=2, label='KAN Test (best)')
+        _hline_entries.append((kan_best_test_rmse, f"RMSE={kan_best_test_rmse:.2e}", '#d62728'))
 
     if title is None:
         title = ("Effect of layer width on RMSE for SG-KAN (SWIM vs. random) and HKAN;\n"
                   "KAN shown as a fixed reference (best architecture, width capped at $2n{+}1$)")
-    plt.title(title, fontsize=11)
+    plt.title(title, fontsize=15)
 
-    plt.xlabel('Layer Width')
-    plt.ylabel('RMSE')
+    plt.xlabel('Layer Width', fontsize=14)
+    plt.ylabel('RMSE', fontsize=14)
     plt.xscale('log')
     plt.yscale('log')
-    plt.legend()
+
+    ax.set_xticks(results_df['layer_width'])
+    ax.set_xticklabels(results_df['layer_width'].astype(int), rotation=45, fontsize=12)
+    ax.xaxis.set_minor_locator(plt.NullLocator())
+    ax.tick_params(axis='y', labelsize=12)
+
+    _annotate_hlines(ax, _hline_entries)
+
+    if show_legend:
+        plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+
+    if save:
+        os.makedirs(save_dir, exist_ok=True)
+        out_path = save_path or os.path.join(save_dir, _title_to_filename(title))
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        print(f"[plot_hypothesis_1_results] saved to {out_path}")
+
     plt.show()
 
 
-def plot_hypothesis_2_results(results_df, kan_fit_time=None, title=None):
+def plot_hypothesis_2_results(results_df, kan_fit_time=None, title=None,
+                               save=True, save_dir="static", save_path=None,
+                               show_legend=True):
     """Plot Hypothesis 2 comparison results: training time vs. layer width for
     SGKAN (swim), SGKAN (random), and HKAN. KAN shown as a fixed horizontal
     reference, since its meaningful width range (up to 2n+1) is incomparable
-    in scale to SG-KAN/HKAN's swept range."""
+    in scale to SG-KAN/HKAN's swept range.
+    show_legend: if False, omits the per-panel legend (use plot_hypothesis_legend
+        to render one shared legend instead, e.g. for multi-panel TF1-TF5 figures)."""
     plt.figure(figsize=(12, 6))
 
     plt.plot(results_df['layer_width'], results_df['sgkan_swim_fit_time'], marker='o',
@@ -57,28 +128,51 @@ def plot_hypothesis_2_results(results_df, kan_fit_time=None, title=None):
     plt.plot(results_df['layer_width'], results_df['hkan_fit_time'], marker='o',
              label='HKAN', color='#2ca02c')
 
+    ax = plt.gca()
+
+    _hline_entries = []
     if kan_fit_time is not None:
-        plt.axhline(kan_fit_time, color='#d62728', linestyle='-', linewidth=2,
-                    label=f'KAN (best architecture, {kan_fit_time:.1f}s)')
+        plt.axhline(kan_fit_time, color='#d62728', linestyle='-', linewidth=2, label='KAN (best architecture)')
+        _hline_entries.append((kan_fit_time, f"{kan_fit_time:.1f}s", '#d62728'))
 
     if title is None:
         title = "Layer Width vs. Training Time"
-    plt.title(title, fontsize=11)
+    plt.title(title, fontsize=15)
 
-    plt.xlabel('Layer Width')
-    plt.ylabel('Training Time (s)')
+    plt.xlabel('Layer Width', fontsize=14)
+    plt.ylabel('Training Time (s)', fontsize=14)
     plt.xscale('log')
     plt.yscale('log')
-    plt.legend()
+
+    ax.set_xticks(results_df['layer_width'])
+    ax.set_xticklabels(results_df['layer_width'].astype(int), rotation=45, fontsize=12)
+    ax.xaxis.set_minor_locator(plt.NullLocator())
+    ax.tick_params(axis='y', labelsize=12)
+
+    _annotate_hlines(ax, _hline_entries)
+
+    if show_legend:
+        plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+
+    if save:
+        os.makedirs(save_dir, exist_ok=True)
+        out_path = save_path or os.path.join(save_dir, _title_to_filename(title))
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        print(f"[plot_hypothesis_2_results] saved to {out_path}")
+
     plt.show()
 
 
-def plot_hypothesis_3_results(results_df, kan_train_inference_time=None, kan_test_inference_time=None, title=None):
+def plot_hypothesis_3_results(results_df, kan_train_inference_time=None, kan_test_inference_time=None,
+                               title=None, save=True, save_dir="static", save_path=None,
+                               show_legend=True):
     """Plot Hypothesis 3 comparison results: inference time vs. layer width for
     SGKAN (swim), SGKAN (random), and HKAN. KAN shown as fixed horizontal
-    references, for the same reason as Hypotheses 1 and 2."""
+    references, for the same reason as Hypotheses 1 and 2.
+    show_legend: if False, omits the per-panel legend (use plot_hypothesis_legend
+        to render one shared legend instead, e.g. for multi-panel TF1-TF5 figures)."""
     plt.figure(figsize=(12, 6))
 
     plt.plot(results_df['layer_width'], results_df['sgkan_swim_train_inf_time'], marker='o', label='SGKAN SWIM Train', color='#1f77b4')
@@ -90,24 +184,93 @@ def plot_hypothesis_3_results(results_df, kan_train_inference_time=None, kan_tes
     plt.plot(results_df['layer_width'], results_df['hkan_train_inf_time'], marker='o', label='HKAN Train', color='#2ca02c')
     plt.plot(results_df['layer_width'], results_df['hkan_test_inf_time'], marker='s', label='HKAN Test', color='#2ca02c', linestyle='--')
 
+    ax = plt.gca()
+
+    _hline_entries = []
     if kan_train_inference_time is not None:
-        plt.axhline(kan_train_inference_time, color='#d62728', linestyle='-', linewidth=2,
-                    label=f'KAN Train (best, {kan_train_inference_time:.4f}s)')
+        plt.axhline(kan_train_inference_time, color='#d62728', linestyle='-', linewidth=2, label='KAN Train (best)')
+        _hline_entries.append((kan_train_inference_time, f"{kan_train_inference_time:.4f}s", '#d62728'))
     if kan_test_inference_time is not None:
-        plt.axhline(kan_test_inference_time, color='#d62728', linestyle='--', linewidth=2,
-                    label=f'KAN Test (best, {kan_test_inference_time:.4f}s)')
+        plt.axhline(kan_test_inference_time, color='#d62728', linestyle='--', linewidth=2, label='KAN Test (best)')
+        _hline_entries.append((kan_test_inference_time, f"{kan_test_inference_time:.4f}s", '#d62728'))
 
     if title is None:
         title = "Layer Width vs. Inference Time"
-    plt.title(title, fontsize=11)
+    plt.title(title, fontsize=15)
 
-    plt.xlabel('Layer Width')
-    plt.ylabel('Inference Time (s)')
+    plt.xlabel('Layer Width', fontsize=14)
+    plt.ylabel('Inference Time (s)', fontsize=14)
     plt.xscale('log')
     plt.yscale('log')
-    plt.legend()
+
+    ax.set_xticks(results_df['layer_width'])
+    ax.set_xticklabels(results_df['layer_width'].astype(int), rotation=45, fontsize=12)
+    ax.xaxis.set_minor_locator(plt.NullLocator())
+    ax.tick_params(axis='y', labelsize=12)
+
+    _annotate_hlines(ax, _hline_entries)
+
+    if show_legend:
+        plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
+
+    if save:
+        os.makedirs(save_dir, exist_ok=True)
+        out_path = save_path or os.path.join(save_dir, _title_to_filename(title))
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        print(f"[plot_hypothesis_3_results] saved to {out_path}")
+
+    plt.show()
+
+
+def plot_hypothesis_legend(kind, save=True, save_dir="static", save_path=None):
+    """Render a standalone shared legend for the Hypothesis figures, so it can
+    be placed once next to a multi-panel figure instead of repeating on every
+    subplot (per supervisor feedback on Figure 4.3-style figures).
+    kind: 'rmse' or 'inference' for the 8-entry Train/Test legend used by
+        Hypotheses 1 and 3; 'time' for the 4-entry legend used by Hypothesis 2."""
+    if kind in ("rmse", "inference"):
+        specs = [
+            ('SGKAN SWIM Train', '#1f77b4', 'o', '-'),
+            ('SGKAN SWIM Test',  '#1f77b4', 's', '--'),
+            ('SGKAN Random Train', '#ff7f0e', 'o', '-'),
+            ('SGKAN Random Test',  '#ff7f0e', 's', '--'),
+            ('HKAN Train', '#2ca02c', 'o', '-'),
+            ('HKAN Test',  '#2ca02c', 's', '--'),
+            ('KAN Train (best)', '#d62728', None, '-'),
+            ('KAN Test (best)',  '#d62728', None, '--'),
+        ]
+        ncol = 4
+        fig_height = 2.2
+    elif kind == "time":
+        specs = [
+            ('SGKAN SWIM', '#1f77b4', 'o', '-'),
+            ('SGKAN Random', '#ff7f0e', 'o', '-'),
+            ('HKAN', '#2ca02c', 'o', '-'),
+            ('KAN (best architecture)', '#d62728', None, '-'),
+        ]
+        ncol = 4
+        fig_height = 1.2
+    else:
+        raise ValueError("kind must be 'rmse', 'inference', or 'time'")
+
+    handles = []
+    for label, color, marker, ls in specs:
+        lw = 2 if marker is None else 1.5
+        handles.append(mlines.Line2D([], [], color=color, marker=marker,
+                                      linestyle=ls, linewidth=lw, label=label))
+
+    fig = plt.figure(figsize=(9, fig_height))
+    fig.legend(handles=handles, loc='center', ncol=ncol, fontsize=12, frameon=True)
+    plt.axis('off')
+
+    if save:
+        os.makedirs(save_dir, exist_ok=True)
+        out_path = save_path or os.path.join(save_dir, f"hypothesis_legend_{kind}.png")
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        print(f"[plot_hypothesis_legend] saved to {out_path}")
+
     plt.show()
 
 
