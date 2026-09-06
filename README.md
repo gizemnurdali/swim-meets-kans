@@ -42,6 +42,10 @@ The project explores combining SWIM's data-driven methodology with KAN's network
 - `kan_parameter_optimization.ipynb`: Optuna grid search over KAN's architecture search space for each test function (TF1–TF5), selecting the winning width configuration used throughout the rest of the benchmarking
 - `sgkan_kan_hkan_benchmarking_evaluation.ipynb`: main benchmarking notebook, covering (1) HKAN reproduction against the paper's reported hyperparameters and results, (2) 50-seed run experiments for SG-KAN, HKAN, and KAN (RMSE, fit time, and inference time, with median/IQR), and (3) layer-width sensitivity analysis comparing SG-KAN (SWIM vs. random pair selection), HKAN, and KAN across TF1–TF5
 
+**Analysis / figure notebooks** (standalone, used to generate specific thesis figures from already-computed results):
+- `edge_comparison_tf3.ipynb`: fits SG-KAN(SWIM) and HKAN at their best TF3 configuration, then plots one fitted edge function from each side by side over the same input range, shading the SG-KAN edge's actual `[lo, hi]` fitting interval. Also builds a per-edge coverage/conditioning summary table (interval coverage fraction, local sample count, local-point-collection method, and kernel-matrix condition number) for every edge in the first layer.
+- `all_models_stability.ipynb`: loads the 50-run CSV results for SG-KAN(SWIM) and SG-KAN(Random) across all five test functions, computes summary statistics (median, IQR, std, skewness, min/max) per split, tallies how often each variant wins on median vs. on stability, and produces side-by-side boxplots of the RMSE distributions for each test function.
+
 ## Contributions
 
 This repository combines and validates implementations from multiple foundational papers:
